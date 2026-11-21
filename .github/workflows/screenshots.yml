@@ -1,0 +1,46 @@
+name: Capturas Google Play
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/capture_store_screenshots.gd'
+      - '.github/workflows/screenshots.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    name: Capturas reais do Pong Mobile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Godot 4.7.2
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.7.2
+          use-dotnet: false
+
+      - name: Capturar menu, partida e vitória
+        run: |
+          if ! command -v xvfb-run >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
+          mkdir -p store/screenshots
+          godot --headless --path . --editor --import --quit
+          xvfb-run -a -s '-screen 0 1280x720x24' godot --path . --windowed --resolution 960x540 --script res://tools/capture_store_screenshots.gd
+          test -s store/screenshots/01-menu.png
+          test -s store/screenshots/02-partida.png
+          test -s store/screenshots/03-vitoria.png
+
+      - name: Publicar imagens
+        uses: actions/upload-artifact@v6
+        with:
+          name: pong-mobile-play-screenshots
+          path: store/screenshots/*.png
+          if-no-files-found: error

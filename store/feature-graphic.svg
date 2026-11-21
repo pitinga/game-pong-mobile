@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1">
+      <stop offset="0" stop-color="#081526"/>
+      <stop offset="0.55" stop-color="#10243c"/>
+      <stop offset="1" stop-color="#081526"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#24415b" stroke-opacity=".38"/>
+    </pattern>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="500" fill="url(#bg)"/>
+  <rect width="1024" height="500" fill="url(#grid)"/>
+  <path d="M512 22V478" stroke="#31506a" stroke-width="5" stroke-dasharray="17 22" opacity=".6"/>
+  <rect x="115" y="174" width="19" height="153" rx="9" fill="#31e4ed" opacity=".48" filter="url(#glow)"/>
+  <rect x="115" y="174" width="19" height="153" rx="9" fill="#31e4ed"/>
+  <rect x="890" y="102" width="19" height="153" rx="9" fill="#ff658d" opacity=".48" filter="url(#glow)"/>
+  <rect x="890" y="102" width="19" height="153" rx="9" fill="#ff658d"/>
+  <path d="M790 332L711 300L652 281" fill="none" stroke="#f5faff" stroke-width="11" stroke-linecap="round" opacity=".16"/>
+  <circle cx="633" cy="272" r="20" fill="#f5faff" opacity=".6" filter="url(#glow)"/>
+  <circle cx="633" cy="272" r="15" fill="#f5faff"/>
+  <rect x="238" y="105" width="550" height="286" rx="30" fill="#081526" fill-opacity=".86" stroke="#31506a" stroke-width="2"/>
+  <text x="513" y="254" font-family="DejaVu Sans, sans-serif" font-size="118" font-weight="900" text-anchor="middle" fill="#f5faff" letter-spacing="8">PONG</text>
+  <text x="513" y="309" font-family="DejaVu Sans, sans-serif" font-size="42" font-weight="800" text-anchor="middle" fill="#31e4ed" letter-spacing="15">MOBILE</text>
+  <text x="513" y="358" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="600" text-anchor="middle" fill="#8aa5bc" letter-spacing="5">ARCADE OFFLINE</text>
+  <rect y="480" width="512" height="20" fill="#31e4ed"/>
+  <rect x="512" y="480" width="512" height="20" fill="#ff658d"/>
+</svg>

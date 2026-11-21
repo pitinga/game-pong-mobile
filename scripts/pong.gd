@@ -1,7 +1,7 @@
 extends Control
 ## Pong Mobile: jogo 2D em uma única cena, sem dependências externas.
 
-enum GameState { MENU, PLAYING, PAUSED, FINISHED }
+enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY }
 
 const BG := Color("#081526")
 const GRID := Color("#183047")
@@ -48,6 +48,7 @@ var _trail: Array[Vector2] = []
 var _menu: CenterContainer
 var _pause_menu: CenterContainer
 var _finish_menu: CenterContainer
+var _privacy_menu: CenterContainer
 var _finish_title: Label
 var _finish_score: Label
 var _pause_button: Button
@@ -140,6 +141,8 @@ func _input(event: InputEvent) -> void:
 			if state == GameState.PLAYING or state == GameState.PAUSED:
 				_toggle_pause()
 				get_viewport().set_input_as_handled()
+			elif state == GameState.PRIVACY:
+				_return_to_menu()
 			return
 		if event.keycode == KEY_ENTER and state == GameState.MENU:
 			_start_match()
@@ -340,10 +343,17 @@ func _return_to_menu() -> void:
 	queue_redraw()
 
 
+func _open_privacy() -> void:
+	state = GameState.PRIVACY
+	_show_interface()
+	queue_redraw()
+
+
 func _show_interface() -> void:
 	_menu.visible = state == GameState.MENU
 	_pause_menu.visible = state == GameState.PAUSED
 	_finish_menu.visible = state == GameState.FINISHED
+	_privacy_menu.visible = state == GameState.PRIVACY
 	_pause_button.visible = state == GameState.PLAYING
 
 
@@ -369,6 +379,10 @@ func _build_interface() -> void:
 	menu_content.add_child(start_button)
 	start_button.pressed.connect(_start_match)
 	_add_label(menu_content, "1 JOGADOR  •  PRIMEIRO A 7 PONTOS", 14, MUTED)
+	var privacy_button := _new_button("PRIVACIDADE", GRID, false)
+	privacy_button.custom_minimum_size.y = 42
+	menu_content.add_child(privacy_button)
+	privacy_button.pressed.connect(_open_privacy)
 
 	_pause_menu = _new_overlay()
 	var pause_content := _overlay_content(_pause_menu)
@@ -396,6 +410,18 @@ func _build_interface() -> void:
 	var exit_button := _new_button("MENU PRINCIPAL", GRID, false)
 	finish_content.add_child(exit_button)
 	exit_button.pressed.connect(_return_to_menu)
+
+	_privacy_menu = _new_overlay()
+	var privacy_content := _overlay_content(_privacy_menu)
+	_add_label(privacy_content, "PRIVACIDADE", 40, WHITE)
+	_add_label(privacy_content, "Pong Mobile funciona offline e não tem anúncios.", 15, MUTED)
+	_add_label(privacy_content, "Não coleta nem envia dados pessoais ou de uso.", 15, MUTED)
+	_add_label(privacy_content, "O placar existe somente durante a partida.", 15, MUTED)
+	_add_label(privacy_content, "Dúvidas: github.com/pitinga/game-pong-mobile/issues", 14, CYAN)
+	_add_space(privacy_content, 8)
+	var privacy_back_button := _new_button("VOLTAR AO MENU", CYAN, true)
+	privacy_content.add_child(privacy_back_button)
+	privacy_back_button.pressed.connect(_return_to_menu)
 
 	_pause_button = _new_button("Ⅱ  PAUSAR", GRID, false)
 	_pause_button.set_anchors_preset(PRESET_TOP_RIGHT)

@@ -1,0 +1,95 @@
+name: AAB Google Play
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Validar compilação ou gerar AAB assinado para a Play Store'
+        required: true
+        type: choice
+        default: validation
+        options:
+          - validation
+          - release
+
+permissions:
+  contents: read
+
+jobs:
+  android_bundle:
+    name: Godot 4.7.2 · AAB Android 7+ / API 36 / ARM64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Android 16 SDK e Build Tools
+        run: sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.1.0' 'cmdline-tools;latest' 'ndk;29.0.14206865'
+
+      - name: Godot 4.7.2 e export templates
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.7.2
+          use-dotnet: false
+          include-templates: true
+
+      - name: Importar projeto e testar
+        run: |
+          godot --headless --path . --editor --import --quit
+          godot --headless --path . --script res://tests/test_pong.gd
+
+      - name: Configurar exportador Android
+        shell: bash
+        run: |
+          settings_file=$(find "$HOME/.config/godot" -maxdepth 1 -type f -name 'editor_settings-4*.tres' -print -quit)
+          test -n "$settings_file"
+          printf '\nexport/android/android_sdk_path = "%s"\n' "$ANDROID_SDK_ROOT" >> "$settings_file"
+          printf 'export/android/java_sdk_path = "%s"\n' "$JAVA_HOME" >> "$settings_file"
+
+      - name: Chave descartável para validar o AAB
+        if: github.event_name != 'workflow_dispatch' || inputs.mode != 'release'
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/pong-upload.jks" -storepass validation-only -keypass validation-only -alias playupload -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=Pong Validation,O=Pitinga,C=BR'
+
+      - name: Usar chave privada de upload (somente publicação)
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release'
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.PLAY_UPLOAD_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_PASSWORD }}
+        run: |
+          test -n "$UPLOAD_KEYSTORE_BASE64"
+          test -n "$UPLOAD_KEY_ALIAS"
+          test -n "$UPLOAD_KEY_PASSWORD"
+          printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/pong-upload.jks"
+          test -s "$RUNNER_TEMP/pong-upload.jks"
+
+      - name: Exportar Android App Bundle assinado
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ runner.temp }}/pong-upload.jks
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && secrets.PLAY_UPLOAD_ALIAS || 'playupload' }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && secrets.PLAY_UPLOAD_PASSWORD || 'validation-only' }}
+        run: |
+          mkdir -p build
+          godot --headless --path . --install-android-build-template --export-release "Google Play" build/pong-mobile-release.aab
+          test -s build/pong-mobile-release.aab
+          jarsigner -verify build/pong-mobile-release.aab
+
+      - name: Disponibilizar AAB para envio à Play Store
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release'
+        uses: actions/upload-artifact@v6
+        with:
+          name: pong-mobile-google-play-release
+          path: build/pong-mobile-release.aab
+          if-no-files-found: error

@@ -45,6 +45,10 @@ func _run_tests() -> void:
 
 	_check(game.state == GameScript.GameState.MENU, "Abre no menu inicial")
 	_check(game.difficulty == 1, "Dificuldade padrão é média")
+	game._open_privacy()
+	_check(game.state == GameScript.GameState.PRIVACY and game._privacy_menu.visible, "Política de privacidade acessível pelo menu")
+	game._return_to_menu()
+	_check(game.state == GameScript.GameState.MENU, "Volta da privacidade para o menu")
 	game._select_difficulty(2)
 	_check(game.difficulty == 2, "Seleciona dificuldade difícil")
 	game._start_match()
