@@ -24,6 +24,20 @@ func _distance_to_paddle(point: Vector2, paddle_x: float, paddle_y: float, half_
 	return point.distance_to(nearest)
 
 
+func _min_sampled_front_distance(start: Vector2, finish: Vector2, paddle_x: float, paddle_y: float, half_height: float, half_width: float, front_sign: float) -> float:
+	# Oráculo de cobertura: percorre a trajetória, independentemente do sweep.
+	# A metade traseira é intencionalmente indefensável; ignorar amostras
+	# cujo centro já tenha cruzado o eixo da raquete.
+	var minimum := INF
+	const SAMPLES := 160
+	for index in range(SAMPLES + 1):
+		var point := start.lerp(finish, float(index) / float(SAMPLES))
+		if front_sign * (point.x - paddle_x) < 0.0:
+			continue
+		minimum = minf(minimum, _distance_to_paddle(point, paddle_x, paddle_y, half_height, half_width))
+	return minimum
+
+
 func _run() -> void:
 	root.size = Vector2i(960, 540)
 	var token := "%d_%d" % [OS.get_process_id(), Time.get_ticks_usec()]
@@ -44,6 +58,9 @@ func _run() -> void:
 	_check(false_right_top < 0.0 and false_right_bottom < 0.0, "P2: espelhos superior/inferior sem contato fantasma")
 	var genuine: float = game._sweep_paddle_contact(Vector2(63, 200), Vector2(59, 230), 55, 270, 270, true)
 	_check(absf(genuine - 1.0 / 3.0) < 0.001, "Contato legítimo com borda superior preserva t=1/3")
+	var back_left: float = game._sweep_paddle_contact(Vector2(52, 200), Vector2(50, 235), 55, 270, 270, true)
+	var back_right: float = game._sweep_paddle_contact(Vector2(908, 200), Vector2(910, 235), 905, 270, 270, false)
+	_check(back_left < 0.0 and back_right < 0.0, "Regra arcade: bola já atrás da face não é resgatada por cima da raquete")
 	for scale in [0.7, 1.0, 1.5]:
 		game.ball_scale = scale
 		game.paddle_scale = scale
@@ -54,32 +71,44 @@ func _run() -> void:
 		var right_lower: float = game._sweep_paddle_contact(Vector2(897, 270.0 + edge + 10.0), Vector2(901, 270.0 + edge - 20.0), 905, 270, 270, false)
 		_check(absf(upper - 1.0 / 3.0) < 0.001 and absf(lower - 1.0 / 3.0) < 0.001 and absf(right_upper - 1.0 / 3.0) < 0.001 and absf(right_lower - 1.0 / 3.0) < 0.001, "%.1fx: contato válido na superfície plana, quatro lados simétricos" % scale)
 
-	# Independente da implementação: no t devolvido, a distância ao
-	# retângulo desenhado deve ser <= raio. Amostragem determinística ampla.
+	# Dois oráculos independentes: contato declarado deve ocorrer exatamente
+	# na superfície (distância == raio), e penetração real na metade frontal
+	# ao longo do segmento exige contato. Só testamos trajetórias que começam
+	# separadas; toque inicial já sobreposto é outra regra em test_p1_regressions.
 	for scale in [0.7, 1.0, 1.5]:
 		game.ball_scale = scale
 		game.paddle_scale = scale
 		var radius: float = game._ball_radius()
 		var half_height: float = game._paddle_height() * 0.5
 		var half_width: float = game.PADDLE_WIDTH * 0.5
-		var invalid_contacts := 0
+		var invalid_surface_contacts := 0
+		var missed_contacts := 0
+		var expected_contacts := 0
 		var evaluated := 0
 		for is_player in [true, false]:
-			var sign := 1.0 if is_player else -1.0
+			var front_sign := 1.0 if is_player else -1.0
 			var paddle_x := 55.0 if is_player else 905.0
 			for relative_x in [half_width + radius + 1.0, half_width + radius + 10.0, half_width + radius + 35.0, half_width + radius + 65.0, half_width + radius + 100.0]:
 				for relative_y in [-half_height - radius - 15.0, -half_height - radius - 3.0, -half_height - radius - 1.0, -half_height, 0.0, half_height, half_height + radius + 1.0, half_height + radius + 3.0, half_height + radius + 15.0]:
 					for movement_y in [-35.0, -15.0, 0.0, 15.0, 35.0]:
 						for movement_x in [12.0, 35.0, 85.0]:
-							var start := Vector2(paddle_x + sign * relative_x, 270.0 + relative_y)
-							var finish := start + Vector2(-sign * movement_x, movement_y)
+							var start := Vector2(paddle_x + front_sign * relative_x, 270.0 + relative_y)
+							var finish := start + Vector2(-front_sign * movement_x, movement_y)
 							var impact: float = game._sweep_paddle_contact(start, finish, paddle_x, 270.0, 270.0, is_player)
 							evaluated += 1
 							if impact >= 0.0:
 								var contact := start.lerp(finish, impact)
-								if _distance_to_paddle(contact, paddle_x, 270.0, half_height, half_width) > radius + 0.05:
-									invalid_contacts += 1
-		_check(invalid_contacts == 0, "%.1fx: %d trajetórias/escalas sem falso positivo (incompatíveis: %d)" % [scale, evaluated, invalid_contacts])
+								if absf(_distance_to_paddle(contact, paddle_x, 270.0, half_height, half_width) - radius) > 0.05:
+									invalid_surface_contacts += 1
+							# Margem para não confundir discretização de amostras ou
+							# tangência numérica com ausência de contato real.
+							var min_distance := _min_sampled_front_distance(start, finish, paddle_x, 270.0, half_height, half_width, front_sign)
+							if min_distance < radius - 0.65:
+								expected_contacts += 1
+								if impact < 0.0:
+									missed_contacts += 1
+		_check(invalid_surface_contacts == 0, "%.1fx: %d trajetórias, contatos declarados na superfície (inválidos: %d)" % [scale, evaluated, invalid_surface_contacts])
+		_check(expected_contacts > 0 and missed_contacts == 0, "%.1fx: %d colisões reais amostradas sem perdas (perdidas: %d)" % [scale, expected_contacts, missed_contacts])
 
 	# Regressão integrada do solver: falso contato não pode inverter vx.
 	game.ball_scale = 1.0

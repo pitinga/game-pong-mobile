@@ -16,7 +16,7 @@ Objetivo: entregar código e regressões para outra rodada de *code review*, **s
 | UI-01 | Durante countdown, `ball_velocity=ZERO` fazia o HUD mostrar `BOLA 1,0x` mesmo com saque acelerado. | `_displayed_ball_speed_ratio` usa `_serve_speed` no countdown e exibe **PRÓXIMA BOLA**. | `test_game_rules.gd`: HUD e transição real pelo `_physics_process`. | Corrigido no modelo e na lógica exibida. |
 | TEST-01 | Um teste antigo exigia indevidamente perder captura após ponto; outras regras não percorriam o fluxo integrado. | Teste invertido para continuidade; nova suíte de colisão; sobrevivência pelo gol e countdown reais; testes de persistência e recuperação assíncrona. Workflows incluem a nova suíte, mas **não serão disparados nesta branch**. | Seis suítes headless. | Ampliado; aparelhos físicos pendentes. |
 | PERF-01 | Suspeitas de redesenho integral e renderização a altas taxas, sem profiler. | Nenhuma mudança de desempenho deliberada. | Medição p50/p95/p99, 60/90/120 Hz, multitouch e sessão prolongada ainda necessária. | Pendente, sem alegação de melhora de FPS. |
-| REG-FIS-01 | Após a correção anterior, o candidato de contato na face superior/inferior aceitava `front_sign * x >= half_width`, **sem limite máximo horizontal**; gerava falsos rebotes distantes e rejeitava contato verdadeiro no segmento plano. | `_sweep_paddle_contact`: restringir a metade plana frontal ao intervalo `0 <= front_sign * x <= half_width + 0.0001`. Os cantos permanecem sob o teste euclidiano. | `test_sweep_geometry.gd`: quatro contraexemplos simétricos, contatos positivos nas escalas 0,7/1/1,5, 4.050 trajetórias com oráculo independente e integração com solver. | Corrigido em Godot headless; não validado em Android. |
+| REG-FIS-01 | Após a correção anterior, o candidato de contato na face superior/inferior aceitava `front_sign * x >= half_width`, **sem limite máximo horizontal**; gerava falsos rebotes distantes e rejeitava contato verdadeiro no segmento plano. | `_sweep_paddle_contact`: restringir a metade plana frontal ao intervalo `0 <= front_sign * x <= half_width + 0.0001`. Os cantos permanecem sob o teste euclidiano. | `test_sweep_geometry.gd`: quatro contraexemplos simétricos, contatos positivos nas escalas 0,7/1/1,5, 4.050 trajetórias; oráculos independentes para **contatos falsos e perdidos**, superfície de contato e integração com solver. | Corrigido em Godot headless; não validado em Android. |
 
 ## Evidência de execução
 
@@ -35,6 +35,14 @@ godot --headless --path . --script res://tests/test_sweep_geometry.gd
 ```
 
 As seis suítes originais retornaram código `0`. Posteriormente, na correção **REG-FIS-01**, o teste geométrico novo apresentou sete asserções falhas antes do ajuste e passou depois dele. O resultado final abrange **sete suítes**. Alguns testes ainda geram avisos `ObjectDB instances were leaked at exit` no encerramento do harness; **não** representam prova de vazamento no Android.
+
+### Reforço da evidência geométrica solicitado na revisão
+
+O oráculo foi ampliado sem alterar a lógica de física. Em uma grade de **4.050 trajetórias determinísticas** (1.350 por escala), verifica para cada contato declarado a distância euclidiana ao retângulo desenhado: `abs(distância - raio) <= 0,05`. A grade começa **sem sobreposição**, pois contatos iniciais do toque arcade podem legitimamente ter distância menor que o raio.
+
+Um segundo oráculo amostra 160 subdivisões do segmento e exige contato para aproximações que penetram mais de 0,65 pixel no círculo-retângulo, considerando somente a metade frontal da raquete. Na execução local, identificou 344 contatos necessários em 0,7×, 360 em 1,0× e 368 em 1,5×, todos detectados; também não houve contato declarado fora da superfície. O nome local `sign` foi substituído por `front_sign` e as mensagens agora diferenciam contatos inválidos de colisões perdidas.
+
+**Regra de produto mantida:** impactos na metade traseira da face superior/inferior não são defensáveis quando a bola já cruzou a face ativa. É uma convenção arcade anterior a REG-FIS-01, não uma aproximação geométrica escondida. A suíte cobre essa rejeição simetricamente; a amostragem não deve exigir contato após a bola entrar na região traseira.
 
 ## Políticas deliberadas e limites da entrega
 

@@ -18,7 +18,7 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 - **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e intersticiais preparados **somente ao encerrar partidas**, a cada 4 partidas concluídas, com intervalo mínimo de 10 minutos e teto de **6 anúncios em qualquer janela de 60 minutos**. Nunca há anúncio na primeira partida, durante o jogo ou em pausa.
 - A Free guarda localmente a contagem de partidas concluídas e os limites de frequência entre reinicializações, sem identificador pessoal, rede ou SDK de anúncios na versão atual. Se não houver anúncio disponível, o jogador continua normalmente e a oportunidade fica para um próximo encerramento.
 - A interface usa `stretch/aspect=expand` para ocupar telas mais largas ou altas que 16:9; toques da interface (como Pausar) não movimentam a raquete.
-- Colisões por tempo de impacto entre bola, paredes, raquetes (inclusive cantos e movimento) e gol, percorrendo o restante do tick após o rebote. Não é possível resgatar bola atrás da face.
+- Colisões por tempo de impacto entre bola, paredes, raquetes (inclusive cantos e movimento) e gol, percorrendo o restante do tick após o rebote. **Regra arcade:** uma bola que já está atrás da face da raquete não pode ser resgatada, inclusive ao atravessar a metade traseira da borda superior/inferior.
 - Multitouch fixa um dedo por raquete: atravessar o centro não troca o jogador, **o controle continua entre pontos** e dedos extras não tomam a captura. Pausa/saída/cancelamento exigem novo toque. Um reposicionamento instantâneo sobre a bola só pode rebater pela frente, sem rebatidas duplicadas.
 
 ## Executar
