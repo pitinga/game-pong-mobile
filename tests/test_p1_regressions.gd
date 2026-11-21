@@ -44,6 +44,9 @@ func _run() -> void:
 	root.add_child(game)
 	await process_frame
 	game._start_match()
+	# Eventos de toque reais, mas física somente quando chamada pelo teste;
+	# assim o resultado não depende do instante do frame no runner headless.
+	game.set_physics_process(false)
 	game._serve_countdown = 0.0
 	game.player_y = 270.0
 	game.ball_position = Vector2(72.0, 329.0)
@@ -115,15 +118,75 @@ func _run() -> void:
 	_touch(0, Vector2(130, 200))
 	await process_frame
 	_check(is_equal_approx(game.player_y, 200.0), "Novo press captura raquete novamente")
+	var before_round: float = game.player_y
+	var before_cpu: float = game.cpu_y
 	game._reset_round(-1)
+	_check(is_equal_approx(game.player_y, before_round) and is_equal_approx(game.cpu_y, before_cpu), "Novo saque mantém ambas as raquetes na posição atual")
 	_drag(0, Vector2(120, 300))
+	_drag(1, Vector2(825, 350))
 	await process_frame
-	_check(is_equal_approx(game.player_y, game.size.y * 0.5), "Novo saque descarta dedo anterior para evitar salto")
+	_check(is_equal_approx(game.player_y, 300.0) and is_equal_approx(game.cpu_y, 350.0), "Dedos mantidos continuam controlando P1 e P2 após ponto")
+	_touch(2, Vector2(100, 200))
+	_drag(2, Vector2(100, 250))
+	await process_frame
+	_check(is_equal_approx(game.player_y, 300.0), "Terceiro dedo continua sem roubar captura após outro saque")
+	_touch(2, Vector2(100, 250), false)
 	_touch(0, Vector2(130, 250), false)
 	_touch(1, Vector2(150, 400), false)
+
+	# O teleporte do toque não varre toda a quadra; só a posição final
+	# intercepta a bola. Uma bola já atrás da face continua indefensável.
+	game._start_match()
+	game._serve_countdown = 0.0
+	_touch(0, Vector2(120, 400))
+	await process_frame
+	game.ball_position = Vector2(67.0, 270.0)
+	game.ball_velocity = Vector2(-500.0, 0.0)
+	_drag(0, Vector2(120, 270))
+	await process_frame
+	game._physics_process(0.003)
+	_check(game.ball_velocity.x > 0.0 and game.ball_position.x >= 72.49, "Toque imediato sobre bola à frente da face rebate uma vez e separa")
+	var bounced_x: float = game.ball_position.x
+	game._physics_process(0.002)
+	_check(game.ball_velocity.x > 0.0 and game.ball_position.x > bounced_x, "Sobreposição frontal não gera múltiplos rebotes")
+	game._start_match()
+	game._serve_countdown = 0.0
+	_touch(0, Vector2(120, 400))
+	await process_frame
+	game.ball_position = Vector2(67.0, 328.0)
+	game.ball_velocity = Vector2(-500.0, 0.0)
+	_drag(0, Vector2(120, 270))
+	await process_frame
+	game._physics_process(0.003)
+	_check(game.ball_velocity.x > 0.0, "Teleporte do toque respeita colisão circular no canto da raquete")
+	game._start_match()
+	game._serve_countdown = 0.0
+	_touch(0, Vector2(120, 400))
+	await process_frame
+	game.ball_position = Vector2(60.0, 270.0)
+	game.ball_velocity = Vector2(-500.0, 0.0)
+	_drag(0, Vector2(120, 270))
+	await process_frame
+	game._physics_process(0.003)
+	_check(game.ball_velocity.x < 0.0, "Toque imediato não resgata bola atrás da face")
+	_touch(0, Vector2(120, 270), false)
+	game._start_match()
+	game._serve_countdown = 0.0
+	_touch(1, Vector2(825, 400))
+	await process_frame
+	game.ball_position = Vector2(game.size.x - 67.0, 270.0)
+	game.ball_velocity = Vector2(500.0, 0.0)
+	_drag(1, Vector2(825, 270))
+	await process_frame
+	game._physics_process(0.003)
+	_check(game.ball_velocity.x < 0.0 and game.ball_position.x <= game.size.x - 72.49, "Toque imediato do P2 é simétrico ao P1")
+	_touch(1, Vector2(825, 270), false)
+	game.set_physics_process(true)
 	game.free()
 	for file in ["user://pong_p1_%s_settings.cfg" % token, "user://pong_p1_%s_stats.cfg" % token]:
-		if FileAccess.file_exists(file):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(file))
+		for suffix in ["", ".bak", ".tmp"]:
+			var candidate: String = file + suffix
+			if FileAccess.file_exists(candidate):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
 	print("Regressões P1: %d falha(s)." % failures)
 	quit(1 if failures else 0)

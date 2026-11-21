@@ -49,8 +49,10 @@ func _run() -> void:
 		print("MATRIZ | tela %dx540 | lógica %.0fx%.0f | contato CPU %d ticks (%.3f s)" % [width, game.size.x, game.size.y, ticks, ticks / 60.0])
 		game.free()
 		for file in ["user://pong_aspect_%s_settings.cfg" % token, "user://pong_aspect_%s_stats.cfg" % token]:
-			if FileAccess.file_exists(file):
-				DirAccess.remove_absolute(ProjectSettings.globalize_path(file))
+			for suffix in ["", ".bak", ".tmp"]:
+				var candidate: String = file + suffix
+				if FileAccess.file_exists(candidate):
+					DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
 	_check(results[720] == results[960] and results[960] < results[1200], "Expand amplia altura em 4:3 e aumenta travessia horizontal em 20:9")
 	print("Matriz de proporções: %d falha(s)." % failures)
 	quit(1 if failures else 0)

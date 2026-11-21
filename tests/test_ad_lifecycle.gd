@@ -22,6 +22,9 @@ class DelayedInterstitial:
 	var loaded := true
 	var cancel_success := true
 	var canceled: Array[int] = []
+	var cancel_calls: Array[int] = []
+	var recovery_calls: Array[int] = []
+	var safe_recovery := false
 
 	func is_interstitial_loaded() -> bool:
 		return loaded
@@ -31,9 +34,16 @@ class DelayedInterstitial:
 		return true
 
 	func cancel_interstitial(request_id: int) -> bool:
+		cancel_calls.append(request_id)
 		if cancel_success:
 			canceled.append(request_id)
 		return cancel_success
+
+	# Confirmação nativa: só retorna true se nenhuma publicidade tardia
+	# poderá abrir e se nenhuma tela de anúncio continua visível.
+	func recover_interstitial(request_id: int) -> bool:
+		recovery_calls.append(request_id)
+		return safe_recovery
 
 var failures := 0
 
@@ -131,6 +141,51 @@ func _run() -> void:
 	mock.interstitial_closed.emit(fourth_id)
 	game.set_interstitial_adapter(null)
 	_check(game._interstitial_adapter == null, "Troca de adaptador só é liberada após fechamento")
+	# Sem callbacks, cancelamento false exige nova tentativa ou recuperação
+	# nativa segura; jamais liberar uma nova partida com anúncio tardio.
+	game.set_interstitial_adapter(mock)
+	game._ad_policy = CountingPolicy.new()
+	for _i in range(3):
+		game._ad_policy.note_finished_match()
+	game._start_match()
+	game._complete_match(false)
+	await process_frame
+	var fifth_id: int = mock.requests.back()
+	var initial_calls := mock.cancel_calls.size()
+	game._ad_requested_at_ticks -= 120000
+	game._process(0.0)
+	_check(mock.cancel_calls.size() == initial_calls + 1 and game._active_ad_request_id == fifth_id, "Cancelamento inconclusivo não libera nova partida")
+	_check(game._ad_status_label.visible and game._ad_safe_exit_button.visible, "Falha persistente apresenta mensagem e saída segura do app")
+	game._start_match()
+	_check(game.state == GameScript.GameState.FINISHED, "Anúncio inconclusivo bloqueia nova partida")
+	game._ad_next_recovery_attempt_ticks -= 5000
+	game._process(0.0)
+	_check(mock.cancel_calls.size() >= initial_calls + 2 or mock.recovery_calls.has(fifth_id), "Watchdog tenta recuperar solicitação sem callback, mesmo após cancelamento false")
+	mock.safe_recovery = true
+	game._ad_next_recovery_attempt_ticks -= 5000
+	game._notification(game.NOTIFICATION_APPLICATION_RESUMED)
+	_check(game._active_ad_request_id == -1, "Garantia nativa de recuperação encerra solicitação travada")
+	game._start_match()
+	_check(game.state == GameScript.GameState.PLAYING, "Recuperação confirmada permite nova partida")
+	mock.interstitial_opened.emit(fifth_id)
+	mock.interstitial_impression.emit(fifth_id)
+	_check(game.state == GameScript.GameState.PLAYING and game._ad_policy._impressions_msec.is_empty(), "Callback tardio de solicitação recuperada não invade partida nem conta impressão")
+	# Abertura sem fechamento também exige watchdog e confirmação nativa.
+	mock.safe_recovery = false
+	game._ad_policy = CountingPolicy.new()
+	for _i in range(3):
+		game._ad_policy.note_finished_match()
+	game._complete_match(false)
+	await process_frame
+	var sixth_id: int = mock.requests.back()
+	mock.interstitial_opened.emit(sixth_id)
+	game._ad_requested_at_ticks -= 120000
+	game._process(0.0)
+	_check(mock.recovery_calls.has(sixth_id) and game._active_ad_request_id == sixth_id, "Anúncio aberto sem fechamento permanece bloqueado durante recuperação")
+	mock.safe_recovery = true
+	game._ad_next_recovery_attempt_ticks -= 5000
+	game._notification(game.NOTIFICATION_APPLICATION_RESUMED)
+	_check(game._active_ad_request_id == -1, "Recuperação nativa confirmada também solta anúncio aberto sem fechamento")
 	game.free()
 	if FileAccess.file_exists(ads_file):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(ads_file))

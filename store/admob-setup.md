@@ -3,7 +3,7 @@
 ## Estado atual
 
 - A lógica de oportunidade de intersticiais **está implementada e testada** em `scripts/ad_policy.gd`: a cada 4 partidas concluídas, mínimo de 10 minutos e máximo de **6 impressões na janela móvel de 60 minutos**.
-- `scripts/pong.gd` oferece intersticial apenas **depois que a partida terminou e a tela final apareceu**, uma tentativa por partida. Não dispara anúncios durante a partida, pausa, primeira partida ou menu. Enquanto a apresentação aceita estiver pendente, os botões de próxima partida/menu ficam indisponíveis até confirmação de fechamento, falha ou cancelamento seguro.
+- `scripts/pong.gd` oferece intersticial apenas **depois que a partida terminou e a tela final apareceu**, uma tentativa por partida. Não dispara anúncios durante a partida, pausa, primeira partida ou menu. Enquanto a apresentação aceita estiver pendente, os botões de próxima partida/menu ficam indisponíveis até confirmação de fechamento, falha, cancelamento ou recuperação nativa segura. Depois de uma espera excessiva, o jogador pode **fechar o app**, mas não iniciar gameplay atrás de um anúncio desconhecido.
 - O contador e os horários das impressões usam **milissegundos Unix** e persistem localmente em `user://pong_free_ad_policy.cfg`, inclusive entre reinicializações. A Free já guarda apenas a contagem de partidas enquanto o SDK não estiver instalado.
 - **Ainda não existe integração do SDK nativo AdMob**. A Free não exibe anúncios nem utiliza identificador de publicidade nesta versão. O app pode continuar funcionando offline.
 - A edição Pro **não deve conter** SDK, permissões ou inicialização de anúncios. O pacote Android Pro e o preset são distintos.
@@ -17,7 +17,8 @@
 5. Implementar um `Node` adaptador do plugin (apenas Free) com o contrato GDScript abaixo, após concluir inicialização, consentimento e pré-carregamento:
    - `is_interstitial_loaded() -> bool`: só retorna `true` quando há intersticial pronto.
    - `show_interstitial(request_id: int) -> bool`: inicia uma solicitação **da tela de fim de partida** e retorna `false` se for recusada. Não enfileirar um anúncio para depois de iniciar a próxima partida.
-   - `cancel_interstitial(request_id: int) -> bool`: usado após 8 segundos sem abertura ou impressão. Só retornar `true` se o adaptador **garantir** que essa solicitação não poderá apresentar o anúncio futuramente. Se retornar `false`, o jogo permanece no resultado aguardando callback nativo (segurança antes de liberar a partida).
+   - `cancel_interstitial(request_id: int) -> bool`: chamado após 8 segundos sem abertura/impressão e novamente a cada 4 segundos enquanto não houver resposta. Só retornar `true` se o adaptador **garantir** que essa solicitação não poderá apresentar anúncio futuramente.
+   - `recover_interstitial(request_id: int) -> bool`: **obrigatório** no adaptador. Reconciliar o estado nativo após falha de cancelamento e após 120 segundos em `SHOWING`, inclusive ao retomar o app. Retornar `true` **somente** se a camada nativa garantir que nenhum anúncio está visível e nenhum anúncio atrasado desse `request_id` poderá surgir. Caso contrário, retornar `false`; o jogo tenta novamente, mantém a partida bloqueada e mostra uma opção para fechar o aplicativo. Simples timeout nunca basta para liberar o jogo.
    - `signal interstitial_opened(request_id: int)`: emitir ao abrir a tela cheia nativa.
    - `signal interstitial_impression(request_id: int)`: emitir no callback nativo **`onAdImpression`**. O jogo persiste essa impressão **uma única vez por ID**, mesmo se o callback chegar tarde. Não registrar no simples pedido de exibição.
    - `signal interstitial_closed(request_id: int)`: emitir ao fechar o anúncio, liberando os botões de partida/menu.
