@@ -15,8 +15,8 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 - Compatibilidade planejada a partir do **Android 7.0**, apenas **ARM64**.
 - Política de privacidade acessível diretamente pelo menu.
 - **Pro**: modo Sobrevivência, dois jogadores no mesmo celular (duas metades da tela), temas de cores, tamanhos da bola e raquetes de 70% a 150%, botão de restauração dos padrões e estatísticas locais.
-- **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e regra preparada para intersticiais após 4 partidas, intervalo mínimo de 10 minutos e teto de 2 anúncios/hora.
-- A Free guarda somente a contagem local de partidas concluídas para preservar esse limite entre reinicializações, sem identificador pessoal, rede ou SDK de anúncios na versão atual.
+- **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e intersticiais preparados **somente ao encerrar partidas**, a cada 4 partidas concluídas, com intervalo mínimo de 10 minutos e teto de **6 anúncios em qualquer janela de 60 minutos**. Nunca há anúncio na primeira partida, durante o jogo ou em pausa.
+- A Free guarda localmente a contagem de partidas concluídas e os limites de frequência entre reinicializações, sem identificador pessoal, rede ou SDK de anúncios na versão atual. Se não houver anúncio disponível, o jogador continua normalmente e a oportunidade fica para um próximo encerramento.
 - A interface usa `stretch/aspect=expand` para ocupar telas mais largas ou altas que 16:9; toques da interface (como Pausar) não movimentam a raquete.
 
 ## Executar
@@ -81,7 +81,7 @@ O workflow **AAB Google Play** executa automaticamente uma compilação de **val
 
 **Nunca** envie o arquivo de keystore nem suas senhas ao GitHub como código, nem os cole nesta conversa. Guarde uma cópia segura da chave. O identificador do pacote será definitivo depois da publicação.
 
-**Publicidade Free:** a política de frequência já é testada em `scripts/ad_policy.gd`, mas **não há SDK AdMob instalado nem anúncio ativo**. Não publicar a Free afirmando conter anúncios antes de completar [a integração e as declarações necessárias](store/admob-setup.md). Nunca publicar IDs de anúncios de teste como se fossem IDs de produção. A Pro permanece sem SDK de publicidade.
+**Publicidade Free:** a política de frequência e o gatilho de fim de partida já são testados, incluindo um adaptador simulado de anúncios. **Não há SDK AdMob instalado nem anúncio ativo**. O ponto de integração do adaptador está em `scripts/pong.gd` (`set_interstitial_adapter`). Não publicar a Free afirmando conter anúncios antes de completar [a integração e as declarações necessárias](store/admob-setup.md). Nunca publicar IDs de anúncios de teste como se fossem IDs de produção. A Pro permanece sem SDK de publicidade.
 
 **Link para a Pro:** o botão da Free ainda informa "em breve". Depois de a ficha Pro estar pública, ativar a feature tag `pong_pro_store_live` no preset Free para habilitar o link oficial à Play Store.
 

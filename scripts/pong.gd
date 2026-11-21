@@ -58,6 +58,11 @@ var _stats := {
 	"custom_wins": 0, "custom_losses": 0,
 }
 var _ad_policy = AdPolicy.new()
+# O SDK será conectado por um adaptador apenas na edição Free. Sem adaptador,
+# nenhum anúncio é solicitado ou exibido.
+var _interstitial_adapter: Node
+var _interstitial_attempted_this_match := false
+var _interstitial_show_pending := false
 
 var state: GameState = GameState.MENU
 var difficulty := 1
@@ -303,6 +308,8 @@ func _draw_centered(message: String, baseline: Vector2, font_size: int, color: C
 
 
 func _start_match() -> void:
+	_interstitial_attempted_this_match = false
+	_interstitial_show_pending = false
 	player_score = 0
 	cpu_score = 0
 	player_won = false
@@ -474,10 +481,68 @@ func _complete_match(won: bool) -> void:
 		_ad_policy.note_finished_match()
 		if _ad_policy.save_state(ad_policy_file) != OK:
 			push_warning("Não foi possível guardar o limite local de anúncios.")
-		# O adaptador AdMob será conectado quando a conta e os IDs estiverem disponíveis.
-		# Nenhum anúncio é solicitado no momento, evitando publicidade de teste em produção.
 	_show_interface()
 	queue_redraw()
+	if not is_pro:
+		# Oportunidade exclusiva de transição: após o placar final aparecer.
+		call_deferred("_try_show_interstitial_after_match")
+
+
+func set_interstitial_adapter(adapter: Node) -> void:
+	## Contrato do adaptador: is_interstitial_loaded() -> bool,
+	## show_interstitial() -> bool, sinais interstitial_impression e interstitial_closed.
+	## Só conectar ao terminar o SDK/consentimento; a Pro ignora o adaptador.
+	if is_pro:
+		return
+	if is_instance_valid(_interstitial_adapter):
+		if _interstitial_adapter.interstitial_impression.is_connected(_on_interstitial_impression):
+			_interstitial_adapter.interstitial_impression.disconnect(_on_interstitial_impression)
+		if _interstitial_adapter.interstitial_closed.is_connected(_on_interstitial_closed):
+			_interstitial_adapter.interstitial_closed.disconnect(_on_interstitial_closed)
+	_interstitial_adapter = null
+	_interstitial_show_pending = false
+	if adapter == null:
+		return
+	if not adapter.has_signal("interstitial_impression") or not adapter.has_signal("interstitial_closed") \
+			or not adapter.has_method("is_interstitial_loaded") or not adapter.has_method("show_interstitial"):
+		push_warning("Adaptador de intersticiais inválido; publicidade desativada.")
+		return
+	_interstitial_adapter = adapter
+	_interstitial_adapter.interstitial_impression.connect(_on_interstitial_impression)
+	_interstitial_adapter.interstitial_closed.connect(_on_interstitial_closed)
+
+
+func _try_show_interstitial_after_match() -> void:
+	# Nunca iniciar anúncio durante a partida, em pausa ou no menu.
+	if is_pro or state != GameState.FINISHED or _interstitial_attempted_this_match:
+		return
+	if not is_instance_valid(_interstitial_adapter):
+		return
+	if not _interstitial_adapter.is_interstitial_loaded() or not _ad_policy.can_show(_ad_now_msec()):
+		return
+	# Uma tentativa por encerramento; falta de inventário não bloqueia o jogo.
+	_interstitial_attempted_this_match = true
+	_interstitial_show_pending = true
+	if not _interstitial_adapter.show_interstitial():
+		_interstitial_show_pending = false
+
+
+func _on_interstitial_impression() -> void:
+	# Somente a confirmação nativa de impressão consome o crédito de 4 jogos.
+	if is_pro or not _interstitial_show_pending:
+		return
+	_interstitial_show_pending = false
+	_ad_policy.record_impression(_ad_now_msec())
+	if _ad_policy.save_state(ad_policy_file) != OK:
+		push_warning("Não foi possível guardar a impressão do anúncio.")
+
+
+func _on_interstitial_closed() -> void:
+	_interstitial_show_pending = false
+
+
+func _ad_now_msec() -> int:
+	return int(Time.get_unix_time_from_system() * 1000.0)
 
 
 func _toggle_pause() -> void:

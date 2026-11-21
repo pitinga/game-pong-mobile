@@ -4,7 +4,7 @@ extends RefCounted
 
 const MATCHES_PER_AD := 4
 const MIN_INTERVAL_MSEC := 10 * 60 * 1000
-const MAX_ADS_PER_HOUR := 2
+const MAX_ADS_PER_HOUR := 6
 const HOUR_MSEC := 60 * 60 * 1000
 
 var matches_since_ad := 0

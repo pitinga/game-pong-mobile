@@ -5,6 +5,30 @@ extends SceneTree
 const GameScript = preload("res://scripts/pong.gd")
 const AdPolicy = preload("res://scripts/ad_policy.gd")
 
+class FakeInterstitialAdapter:
+	extends Node
+	signal interstitial_impression
+	signal interstitial_closed
+	var loaded := true
+	var accepts_show := true
+	var show_calls := 0
+	var state_when_shown := -1
+	var game: Control
+
+	func is_interstitial_loaded() -> bool:
+		return loaded
+
+	func show_interstitial() -> bool:
+		show_calls += 1
+		state_when_shown = game.state
+		return accepts_show
+
+	func confirm_impression() -> void:
+		interstitial_impression.emit()
+
+	func close_ad() -> void:
+		interstitial_closed.emit()
+
 var _failures := 0
 
 
@@ -52,6 +76,12 @@ func _expected_cpu_impact_y(game: Control) -> float:
 		else:
 			expected_y = 2.0 * bottom - expected_y
 	return expected_y
+
+
+func _finish_free_match(game: Control) -> void:
+	game._start_match()
+	for _point in range(game.WIN_SCORE):
+		game._score_point(true)
 
 
 func _run_tests() -> void:
@@ -218,12 +248,14 @@ func _run_tests() -> void:
 	_check(game.state == GameScript.GameState.MENU and game.player_score == 0, "Volta ao menu e limpa o placar")
 
 	var ad_policy = AdPolicy.new()
+	_check(ad_policy.MAX_ADS_PER_HOUR == 6, "Teto Free é de seis intersticiais por hora")
 	for _i in range(3):
 		ad_policy.note_finished_match()
-	_check(not ad_policy.can_show(0), "Free não mostra anúncio antes da quarta partida")
+	_check(not ad_policy.can_show(0), "Primeira, segunda e terceira partidas não permitem anúncio")
 	ad_policy.note_finished_match()
 	_check(ad_policy.can_show(0), "Quarta partida torna anúncio elegível")
 	ad_policy.record_impression(0)
+	_check(ad_policy.matches_since_ad == 0, "Impressão confirmada reinicia o contador de quatro partidas")
 	for _i in range(4):
 		ad_policy.note_finished_match()
 	_check(not ad_policy.can_show(599999), "Intersticial respeita espera mínima de dez minutos")
@@ -231,16 +263,85 @@ func _run_tests() -> void:
 	ad_policy.record_impression(600000)
 	for _i in range(4):
 		ad_policy.note_finished_match()
-	_check(not ad_policy.can_show(1200000), "Limite de dois intersticiais por hora")
-	_check(ad_policy.can_show(3600000), "Teto horário expira após sessenta minutos")
+	_check(ad_policy.can_show(1200000), "Limite de seis permite terceiro anúncio após dez minutos")
+	_check(ad_policy.can_show(3600000), "Primeira impressão expira na fronteira exata de sessenta minutos")
 	_check(ad_policy._impressions_msec.size() == 1 and ad_policy._impressions_msec[0] == 600000, "Poda descarta apenas impressões que completaram uma hora")
 	_check(ad_policy.can_show(4200000) and ad_policy._impressions_msec.is_empty(), "Poda remove múltiplos registros vencidos na fronteira exata")
+	var capped_policy = AdPolicy.new()
+	for _i in range(4):
+		capped_policy.note_finished_match()
+	for _i in range(6):
+		capped_policy.record_impression(0)
+	# Simula seis impressões da rede no mesmo intervalo para testar o teto
+	# independentemente da regra de dez minutos.
+	for _i in range(4):
+		capped_policy.note_finished_match()
+	_check(not capped_policy.can_show(600000), "Seis impressões na última hora bloqueiam uma sétima")
+	_check(capped_policy.can_show(3600000), "Após uma hora as seis impressões vencidas são removidas")
 	_check(ad_policy.save_state(test_ads_file) == OK, "Limites de anúncios são salvos em arquivo de teste")
 	var restored_policy = AdPolicy.new()
 	_check(restored_policy.load_state(test_ads_file) == OK, "Limites de anúncios são recarregados após reiniciar")
 	_check(restored_policy.matches_since_ad == ad_policy.MATCHES_PER_AD and restored_policy._last_impression_msec == 600000, "Recarrega contador e último anúncio sem zerar limites")
 	_check(not restored_policy.can_show(599999), "Relógio local retrocedendo não libera anúncio")
 	_check(restored_policy.can_show(4200000), "Após reinício, janela de publicidade expirada libera novo anúncio")
+
+	# Integração de evento real de fim de partida com adaptador injetável.
+	# Não carrega SDK, faz solicitações à rede nem usa identificadores reais.
+	var fake_ad := FakeInterstitialAdapter.new()
+	fake_ad.game = game
+	game.add_child(fake_ad)
+	game.set_interstitial_adapter(fake_ad)
+	game._ad_policy = AdPolicy.new()
+	for match_number in range(3):
+		_finish_free_match(game)
+		await process_frame
+		_check(fake_ad.show_calls == 0, "Partida %d: nenhum intersticial solicitado" % (match_number + 1))
+	_finish_free_match(game)
+	await process_frame
+	_check(fake_ad.show_calls == 1 and fake_ad.state_when_shown == GameScript.GameState.FINISHED, "Só oferece intersticial ao concluir a quarta partida")
+	game._try_show_interstitial_after_match()
+	_check(fake_ad.show_calls == 1, "Não oferece intersticial duas vezes no mesmo fim de partida")
+	_check(game._ad_policy.matches_since_ad == 4, "Solicitar exibição não conta como impressão")
+	fake_ad.confirm_impression()
+	_check(game._ad_policy.matches_since_ad == 0 and game._ad_policy._impressions_msec.size() == 1, "Callback de impressão consome crédito e registra frequência")
+	var saved_ad_policy := AdPolicy.new()
+	_check(saved_ad_policy.load_state(test_ads_file) == OK and saved_ad_policy._impressions_msec.size() == 1 and saved_ad_policy.matches_since_ad == 0, "Impressão de verdade é persistida imediatamente")
+	fake_ad.confirm_impression()
+	_check(game._ad_policy._impressions_msec.size() == 1, "Callback duplicado não duplica impressão")
+	_finish_free_match(game)
+	await process_frame
+	_check(fake_ad.show_calls == 1, "Não oferece novo anúncio na primeira partida após impressão")
+	# Bloqueios de contexto, indisponibilidade e falha de SDK não consomem
+	# partidas acumuladas; o próximo término pode tentar novamente.
+	game._ad_policy = AdPolicy.new()
+	for _i in range(4):
+		game._ad_policy.note_finished_match()
+	game._start_match()
+	game._try_show_interstitial_after_match()
+	_check(fake_ad.show_calls == 1, "Nenhum intersticial inicia durante uma partida")
+	game._toggle_pause()
+	game._try_show_interstitial_after_match()
+	_check(fake_ad.show_calls == 1, "Nenhum intersticial inicia durante pausa")
+	fake_ad.loaded = false
+	_finish_free_match(game)
+	await process_frame
+	_check(fake_ad.show_calls == 1 and game._ad_policy.matches_since_ad == 4, "Sem anúncio carregado, jogo segue e contador continua elegível")
+	fake_ad.loaded = true
+	fake_ad.accepts_show = false
+	_finish_free_match(game)
+	await process_frame
+	_check(fake_ad.show_calls == 2 and game._ad_policy.matches_since_ad == 4, "Falha do SDK não consome quatro partidas")
+	fake_ad.accepts_show = true
+	_finish_free_match(game)
+	await process_frame
+	_check(fake_ad.show_calls == 3, "Nova partida concluída permite nova tentativa após falha")
+	fake_ad.close_ad()
+	fake_ad.confirm_impression()
+	_check(game._ad_policy.matches_since_ad == 4, "Fechamento sem impressão não reinicia o contador")
+	game.set_interstitial_adapter(null)
+	game._return_to_menu()
+	game._try_show_interstitial_after_match()
+	_check(fake_ad.show_calls == 3, "Nenhum intersticial inicia no menu")
 
 	game.free()
 	game = load("res://scenes/main.tscn").instantiate()
@@ -331,6 +432,11 @@ func _run_tests() -> void:
 	root.add_child(real_pro)
 	await process_frame
 	_check(real_pro.is_pro and real_pro._pro_button == null, "Menu Pro não possui botão de compra ou anúncios")
+	var pro_fake_ad := FakeInterstitialAdapter.new()
+	pro_fake_ad.game = real_pro
+	real_pro.add_child(pro_fake_ad)
+	real_pro.set_interstitial_adapter(pro_fake_ad)
+	_check(real_pro._interstitial_adapter == null, "Pro rejeita adaptador e não ativa SDK de publicidade")
 	_check(real_pro._stats["best_survival"] == 1, "Nova instância Pro carrega estatísticas do teste isolado")
 	var pro_menu_panel := real_pro._menu.get_child(0) as PanelContainer
 	_check(pro_menu_panel.get_combined_minimum_size().y <= 530.0, "Menu Pro cabe no celular em paisagem")
