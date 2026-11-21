@@ -1,4 +1,4 @@
-# Revisão técnica e decisões — Pong Mobile 0.3.4
+# Revisão técnica e decisões — Pong Mobile 0.3.5
 
 Base: revisão estática do commit `730300213f195fafcf6d286105ad7040d9b7aa67` (21/11/2026). Neste trabalho o arquivo `scripts/pong.gd` foi lido integralmente, incluindo `_build_interface`, helpers e áudio. Foram executados testes com **Godot 4.7.2 stable**, Linux headless; a experiência física em aparelho Android **não** foi medida.
 
@@ -23,19 +23,21 @@ Teste de trajetória horizontal idêntica, dificuldade média, 60 ticks/s e seed
 
 Com a mesma altura de tela, a área lógica pode crescer em **altura** no 4:3 ou em **largura** no 20:9. Mais tempo de trajetória horizontal também causa maior aceleração da bola e altera o tempo de resposta do computador. `tests/test_aspect_matrix.gd` verifica os três cenários. Falta simular milhares de trajetórias variadas, inclusive diagonais, múltiplos rebotes e vitórias, para decidir um rebalanceamento.
 
-## Decisões de jogabilidade pendentes
+## Decisões de jogabilidade adotadas
 
-1. **Toque direto versus velocidade limitada (P1):** o toque continua colocando a raquete diretamente em `y`; teclado usa `PLAYER_SPEED=640`. A captura por dedo está corrigida, **mas não foi escolhida uma nova velocidade ou latência de toque**. A opção mais simples mantém o controle arcade imediato. A alternativa limita deslocamento por tick e exigirá rebalanceamento por dificuldade. Escolher antes de declarar experiência competitiva equilibrada.
-2. **Quadra com `expand` ou física normalizada (P2):** manter área lógica crescente, ou fixar quadra central e usar sobra apenas para cenário/UI. Não alterar velocidades isoladamente sem testar.
-3. **Sobrevivência (P2):** fazer ponto contra a CPU ainda reinicia a velocidade da bola, sem perder as rebatidas acumuladas. Decidir se é a experiência desejada e se recordes devem separar dificuldade/customização.
-4. **Sequência Pro (P2):** abandono/reinício de uma partida não quebra sequência de vitórias. Decidir se sequência significa partidas *concluídas* ou tentativas sem abandono.
+1. **Toque imediato (P1):** manter controle arcade direto no celular, apesar de ter deslocamento mais rápido que o teclado (`PLAYER_SPEED=640`). Captura por dedo permanece fixa e segura entre eventos.
+2. **Quadra `expand` (P2):** manter a tela toda aproveitada; a diferença de tempo entre proporções foi medida e aceita como característica, sem normalização arbitrária neste momento.
+3. **Sobrevivência progressiva (P2):** fazer ponto na CPU preserva rebatidas **e velocidade da bola**, inclusive no limite máximo. Uma nova tentativa reinicia a velocidade-base. Regressões em `tests/test_game_rules.gd`.
+4. **Sequência competitiva Pro (P2):** abandonar ou reiniciar uma partida **Clássica** ativa, inclusive pausada, zera a sequência corrente; **não** cria derrota nem incrementa partidas. Sair após a vitória mantém a sequência. Testes incluem persistência em disco.
+
+**Decisões adicionais futuras:** se os recordes de Sobrevivência devem separar dificuldades e ajustes Pro; e se as sequências clássicas precisam ser separadas por dificuldade. Não alterado nesta versão.
 
 ## Pendências técnicas e validações obrigatórias
 
 - A **Free não tem SDK/IDs AdMob nem anúncios ativos**. O contrato exige que cancelamento do adaptador realmente impeça apresentação futura; se a camada nativa não puder prometer isso, ela deverá informar falha/fechamento antes de destravar o resultado. Integrar consentimento e política de privacidade antes de publicidade real. A **Pro permanece sem SDK**.
-- O modelo de varredura interpolou o deslocamento das raquetes realizado **no tick da física**; o toque direto que teleporta uma raquete entre ticks ainda é regra de jogabilidade pendente. Investigar trajetórias diagonais extremas e impacto simultâneo com parede em aparelho.
+- O modelo de varredura interpolou o deslocamento das raquetes realizado **no tick da física**; o toque direto que reposiciona a raquete entre ticks foi **adotado deliberadamente** como regra arcade. Investigar trajetórias diagonais extremas e impacto simultâneo com parede em aparelho.
 - Testar multitouch no Android real: duas mãos, cruzamentos, dedo retido sobre botão, corte de app e navegação por gestos. Provar responsividade a 60/90/120 Hz no telefone.
-- `expand`, resize, IA e lógica de sobrevivência exigem decisão de produto e testes estatísticos. O código atual não foi declarado equilibrado em todos os formatos.
+- `expand` foi aprovado, mas resize, IA e recordes de Sobrevivência ainda merecem testes estatísticos. O código atual não foi declarado equilibrado em todos os formatos.
 - Gravações síncronas de sliders, recuperação transacional de ConfigFile, isolamento completo de fixtures, perfil de CPU/GPU e suavidade de desenho ainda merecem revisão. **Não houve profiling nem otimização comprovada**.
 - Saída `Godot --headless` registra alguns avisos de `ObjectDB instances were leaked at exit` herdados do encerramento da suíte. A suite deve eventualmente liberar todos os recursos; esses avisos não equivalem a vazamento medido no APK.
 
@@ -47,6 +49,7 @@ godot --headless --path . --script res://tests/test_pong.gd
 godot --headless --path . --script res://tests/test_p1_regressions.gd
 godot --headless --path . --script res://tests/test_ad_lifecycle.gd
 godot --headless --path . --script res://tests/test_aspect_matrix.gd
+godot --headless --path . --script res://tests/test_game_rules.gd
 ```
 
 Também são executados pelos workflows `android.yml` e `google-play.yml`. Builds Android, compatibilidade em aparelho e comportamento de SDK AdMob real são verificações separadas do sucesso desses testes headless.

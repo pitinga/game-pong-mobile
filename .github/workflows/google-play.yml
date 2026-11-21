@@ -51,6 +51,7 @@ jobs:
           godot --headless --path . --script res://tests/test_p1_regressions.gd
           godot --headless --path . --script res://tests/test_ad_lifecycle.gd
           godot --headless --path . --script res://tests/test_aspect_matrix.gd
+          godot --headless --path . --script res://tests/test_game_rules.gd
 
       - name: Configurar exportador Android
         shell: bash

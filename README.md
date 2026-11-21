@@ -4,9 +4,9 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 
 ## Funcionalidades
 
-- Controle da raquete por **toque/arraste** na tela; no computador, **mouse, W/S ou setas**.
+- Controle **imediato** da raquete por toque/arraste na tela; no computador, **mouse, W/S ou setas**.
 - Três dificuldades reais para o computador: **Fácil, Médio e Difícil** (reação, movimento, antecipação e precisão diferentes), recalibradas conforme o tamanho personalizado das raquetes e da bola.
-- Bola acelera continuamente durante a disputa **e** após cada rebatida, até um limite; a velocidade reinicia após cada ponto.
+- Bola acelera continuamente durante a disputa **e** após cada rebatida, até um limite. No Clássico, reinicia após cada ponto; na **Sobrevivência Pro**, mantém a velocidade acumulada após pontuar no computador e reinicia apenas numa nova tentativa.
 - Indicador na tela mostra o nível atual e a velocidade da bola.
 - Placar até **7 pontos** na Free; a Pro permite 7, 11 ou 21 pontos.
 - **Pausa**, continuar, reiniciar e voltar ao menu.
@@ -14,7 +14,7 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 - Tela horizontal (**paisagem**), otimizada para celulares Android.
 - Compatibilidade planejada a partir do **Android 7.0**, apenas **ARM64**.
 - Política de privacidade acessível diretamente pelo menu.
-- **Pro**: modo Sobrevivência, dois jogadores no mesmo celular (duas metades da tela), temas de cores, tamanhos da bola e raquetes de 70% a 150%, botão de restauração dos padrões e estatísticas locais.
+- **Pro**: modo Sobrevivência, dois jogadores no mesmo celular (duas metades da tela), temas de cores, tamanhos da bola e raquetes de 70% a 150%, botão de restauração dos padrões e estatísticas locais. Abandonar ou reiniciar uma partida clássica em andamento encerra a sequência de vitórias, **sem adicionar uma derrota**.
 - **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e intersticiais preparados **somente ao encerrar partidas**, a cada 4 partidas concluídas, com intervalo mínimo de 10 minutos e teto de **6 anúncios em qualquer janela de 60 minutos**. Nunca há anúncio na primeira partida, durante o jogo ou em pausa.
 - A Free guarda localmente a contagem de partidas concluídas e os limites de frequência entre reinicializações, sem identificador pessoal, rede ou SDK de anúncios na versão atual. Se não houver anúncio disponível, o jogador continua normalmente e a oportunidade fica para um próximo encerramento.
 - A interface usa `stretch/aspect=expand` para ocupar telas mais largas ou altas que 16:9; toques da interface (como Pausar) não movimentam a raquete.
@@ -40,6 +40,7 @@ godot --headless --path . --script res://tests/test_pong.gd
 godot --headless --path . --script res://tests/test_p1_regressions.gd
 godot --headless --path . --script res://tests/test_ad_lifecycle.gd
 godot --headless --path . --script res://tests/test_aspect_matrix.gd
+godot --headless --path . --script res://tests/test_game_rules.gd
 ```
 
 ## Android (APK de teste)
@@ -112,6 +113,7 @@ tests/test_pong.gd          Testes de jogabilidade, edições e anúncios
 tests/test_p1_regressions.gd  Regressões de colisão e dedos simultâneos
 tests/test_ad_lifecycle.gd   Regressões de callbacks assíncronos de publicidade
 tests/test_aspect_matrix.gd  Matriz headless de proporções lógicas
+tests/test_game_rules.gd    Regras de Sobrevivência e sequência de vitórias
 export_presets.cfg          Presets de exportação Free e Pro
 .github/workflows/          Testes, APKs e AABs
 docs/                      Políticas de privacidade Free e Pro
