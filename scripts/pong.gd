@@ -85,6 +85,7 @@ var ball_position := Vector2(480.0, 270.0)
 var ball_velocity := Vector2.ZERO
 var _serve_countdown := 0.0
 var _serve_direction := 1.0
+var _serve_speed := BASE_BALL_SPEED
 var _cpu_target_y := 270.0
 var _cpu_reaction_timer := 0.0
 var _cpu_aim_bias := 0.0
@@ -435,6 +436,7 @@ func _draw_centered(message: String, baseline: Vector2, font_size: int, color: C
 func _start_match() -> void:
 	if _active_ad_request_id != -1:
 		return
+	_break_streak_on_abandon()
 	_match_id += 1
 	_clear_touch_captures()
 	_interstitial_attempted_this_match = false
@@ -509,18 +511,19 @@ func _reset_positions() -> void:
 	_trail.clear()
 
 
-func _reset_round(direction: float) -> void:
+func _reset_round(direction: float, next_serve_speed: float = BASE_BALL_SPEED) -> void:
 	# Requer novo press após um ponto; dedo parado não teletransporta raquete.
 	_clear_touch_captures()
 	_reset_positions()
 	_serve_direction = direction
+	_serve_speed = clampf(next_serve_speed, BASE_BALL_SPEED, MAX_BALL_SPEED)
 	_serve_countdown = 0.9
 	_cpu_reaction_timer = 0.0
 
 
 func _launch_ball() -> void:
 	var angle := randf_range(-0.55, 0.55)
-	ball_velocity = Vector2(cos(angle) * _serve_direction, sin(angle)) * BASE_BALL_SPEED
+	ball_velocity = Vector2(cos(angle) * _serve_direction, sin(angle)) * _serve_speed
 	if _serve_direction > 0.0:
 		_cpu_aim_bias = randf_range(-_cpu_aim_error(), _cpu_aim_error())
 		_cpu_reaction_timer = _cpu_reaction_delay()
@@ -579,7 +582,9 @@ func _score_point(for_player: bool) -> void:
 	if match_mode == MatchMode.SURVIVAL:
 		_play_sound("point")
 		if for_player:
-			_reset_round(-1.0)
+			# Marcar ponto não reduz a pressão: a próxima bola mantém a
+			# velocidade alcançada nesta tentativa de Sobrevivência.
+			_reset_round(-1.0, ball_velocity.length())
 		else:
 			cpu_score = 1
 			_complete_match(false)
@@ -768,6 +773,7 @@ func _toggle_pause() -> void:
 func _return_to_menu() -> void:
 	if _active_ad_request_id != -1:
 		return
+	_break_streak_on_abandon()
 	_clear_touch_captures()
 	state = GameState.MENU
 	player_score = 0
@@ -878,6 +884,16 @@ func _record_pro_stats(won: bool) -> void:
 				_stats[stat_prefix + "_losses"] += 1
 				_stats["streak"] = 0
 	_save_pro_stats()
+
+
+func _break_streak_on_abandon() -> void:
+	# Sequência competitiva vale apenas para o Clássico. Reinício/saída
+	# de tentativa ativa quebra a sequência, mas não cria uma derrota.
+	if not is_pro or match_mode != MatchMode.CLASSIC or state not in [GameState.PLAYING, GameState.PAUSED]:
+		return
+	if int(_stats["streak"]) > 0:
+		_stats["streak"] = 0
+		_save_pro_stats()
 
 
 func _count_pro_matches() -> int:
