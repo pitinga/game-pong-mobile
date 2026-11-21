@@ -16,6 +16,7 @@ Objetivo: entregar código e regressões para outra rodada de *code review*, **s
 | UI-01 | Durante countdown, `ball_velocity=ZERO` fazia o HUD mostrar `BOLA 1,0x` mesmo com saque acelerado. | `_displayed_ball_speed_ratio` usa `_serve_speed` no countdown e exibe **PRÓXIMA BOLA**. | `test_game_rules.gd`: HUD e transição real pelo `_physics_process`. | Corrigido no modelo e na lógica exibida. |
 | TEST-01 | Um teste antigo exigia indevidamente perder captura após ponto; outras regras não percorriam o fluxo integrado. | Teste invertido para continuidade; nova suíte de colisão; sobrevivência pelo gol e countdown reais; testes de persistência e recuperação assíncrona. Workflows incluem a nova suíte, mas **não serão disparados nesta branch**. | Seis suítes headless. | Ampliado; aparelhos físicos pendentes. |
 | PERF-01 | Suspeitas de redesenho integral e renderização a altas taxas, sem profiler. | Nenhuma mudança de desempenho deliberada. | Medição p50/p95/p99, 60/90/120 Hz, multitouch e sessão prolongada ainda necessária. | Pendente, sem alegação de melhora de FPS. |
+| REG-FIS-01 | Após a correção anterior, o candidato de contato na face superior/inferior aceitava `front_sign * x >= half_width`, **sem limite máximo horizontal**; gerava falsos rebotes distantes e rejeitava contato verdadeiro no segmento plano. | `_sweep_paddle_contact`: restringir a metade plana frontal ao intervalo `0 <= front_sign * x <= half_width + 0.0001`. Os cantos permanecem sob o teste euclidiano. | `test_sweep_geometry.gd`: quatro contraexemplos simétricos, contatos positivos nas escalas 0,7/1/1,5, 4.050 trajetórias com oráculo independente e integração com solver. | Corrigido em Godot headless; não validado em Android. |
 
 ## Evidência de execução
 
@@ -30,9 +31,10 @@ godot --headless --path . --script res://tests/test_ad_lifecycle.gd
 godot --headless --path . --script res://tests/test_aspect_matrix.gd
 godot --headless --path . --script res://tests/test_game_rules.gd
 godot --headless --path . --script res://tests/test_collision_timing.gd
+godot --headless --path . --script res://tests/test_sweep_geometry.gd
 ```
 
-Os seis comandos retornaram código `0`. Alguns testes ainda geram avisos `ObjectDB instances were leaked at exit` no encerramento do harness; **não** representam prova de vazamento no Android.
+As seis suítes originais retornaram código `0`. Posteriormente, na correção **REG-FIS-01**, o teste geométrico novo apresentou sete asserções falhas antes do ajuste e passou depois dele. O resultado final abrange **sete suítes**. Alguns testes ainda geram avisos `ObjectDB instances were leaked at exit` no encerramento do harness; **não** representam prova de vazamento no Android.
 
 ## Políticas deliberadas e limites da entrega
 

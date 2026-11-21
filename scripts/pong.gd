@@ -341,7 +341,7 @@ func _sweep_paddle_contact(start: Vector2, finish: Vector2, paddle_x: float, sta
 				continue
 			var t: float = (side * (half_height + radius) - p.y) / d.y
 			var x: float = p.x + d.x * t
-			if t >= 0.0 and t <= 1.0 and front_sign * x >= half_width - 0.0001:
+			if t >= 0.0 and t <= 1.0 and front_sign * x >= 0.0 and front_sign * x <= half_width + 0.0001:
 				nearest = minf(nearest, t)
 	# Cantos arredondados pela geometria real do círculo: distância euclidiana.
 	var speed_squared := d.length_squared()

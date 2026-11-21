@@ -43,6 +43,7 @@ godot --headless --path . --script res://tests/test_ad_lifecycle.gd
 godot --headless --path . --script res://tests/test_aspect_matrix.gd
 godot --headless --path . --script res://tests/test_game_rules.gd
 godot --headless --path . --script res://tests/test_collision_timing.gd
+godot --headless --path . --script res://tests/test_sweep_geometry.gd
 ```
 
 ## Android (APK de teste)
@@ -117,6 +118,7 @@ tests/test_ad_lifecycle.gd   Regressões de callbacks assíncronos de publicidad
 tests/test_aspect_matrix.gd  Matriz headless de proporções lógicas
 tests/test_game_rules.gd    Regras de Sobrevivência e sequência de vitórias
 tests/test_collision_timing.gd  Tempo de impacto de paredes, raquetes e gols
+tests/test_sweep_geometry.gd  Oráculo independente da geometria círculo/retângulo
 export_presets.cfg          Presets de exportação Free e Pro
 .github/workflows/          Testes, APKs e AABs
 docs/                      Políticas de privacidade Free e Pro
