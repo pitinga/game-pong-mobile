@@ -17,12 +17,15 @@ const BALL_RADIUS := 10.0
 const FIELD_MARGIN := 18.0
 const PLAYER_SPEED := 640.0
 const BASE_BALL_SPEED := 345.0
-const MAX_BALL_SPEED := 780.0
+const BALL_ACCELERATION := 38.0
+const PADDLE_SPEED_BONUS := 55.0
+const MAX_BALL_SPEED := 1150.0
 const WIN_SCORE := 7
 
-const CPU_SPEEDS := [235.0, 335.0, 455.0]
-const CPU_REACTION := [0.34, 0.20, 0.11]
-const CPU_ERROR := [80.0, 38.0, 12.0]
+const CPU_SPEEDS := [185.0, 260.0, 370.0]
+const CPU_REACTION := [0.48, 0.30, 0.15]
+const CPU_ERROR := [115.0, 80.0, 18.0]
+const CPU_LOOKAHEAD := [0.10, 0.30, 0.85]
 const DIFFICULTIES := ["FÁCIL", "MÉDIO", "DIFÍCIL"]
 
 var state: GameState = GameState.MENU
@@ -39,6 +42,7 @@ var _serve_countdown := 0.0
 var _serve_direction := 1.0
 var _cpu_target_y := 270.0
 var _cpu_reaction_timer := 0.0
+var _cpu_aim_bias := 0.0
 var _trail: Array[Vector2] = []
 
 var _menu: CenterContainer
@@ -80,7 +84,29 @@ func _physics_process(delta: float) -> void:
 		queue_redraw()
 		return
 
-	ball_position += ball_velocity * delta
+	_accelerate_ball(delta)
+	# Passos curtos evitam atravessar as raquetes quando a bola estiver rápida.
+	var substeps := maxi(1, ceili(ball_velocity.length() * delta / BALL_RADIUS))
+	var step_delta := delta / float(substeps)
+	for _step in range(substeps):
+		ball_position += ball_velocity * step_delta
+		_check_ball_collisions()
+		if ball_position.x < -BALL_RADIUS:
+			_score_point(false)
+			queue_redraw()
+			return
+		elif ball_position.x > size.x + BALL_RADIUS:
+			_score_point(true)
+			queue_redraw()
+			return
+
+	_trail.push_front(ball_position)
+	if _trail.size() > 12:
+		_trail.pop_back()
+	queue_redraw()
+
+
+func _check_ball_collisions() -> void:
 	var top := FIELD_MARGIN + BALL_RADIUS
 	var bottom := size.y - FIELD_MARGIN - BALL_RADIUS
 	if ball_position.y <= top and ball_velocity.y < 0.0:
@@ -106,17 +132,6 @@ func _physics_process(delta: float) -> void:
 		and absf(ball_position.y - cpu_y) <= PADDLE_HEIGHT * 0.5 + BALL_RADIUS:
 		ball_position.x = cpu_x - PADDLE_WIDTH * 0.5 - BALL_RADIUS
 		_bounce_from_paddle(false)
-
-	_trail.push_front(ball_position)
-	if _trail.size() > 12:
-		_trail.pop_back()
-
-	if ball_position.x < -BALL_RADIUS:
-		_score_point(false)
-	elif ball_position.x > size.x + BALL_RADIUS:
-		_score_point(true)
-
-	queue_redraw()
 
 
 func _input(event: InputEvent) -> void:
@@ -179,6 +194,8 @@ func _draw() -> void:
 	_draw_centered("VOCÊ", Vector2(w * 0.42, 106), 13, MUTED)
 	_draw_centered("CPU", Vector2(w * 0.58, 106), 13, MUTED)
 	if state == GameState.PLAYING:
+		var speed_ratio := maxf(1.0, ball_velocity.length() / BASE_BALL_SPEED)
+		_draw_centered("NÍVEL %s   •   BOLA %.1fx" % [DIFFICULTIES[difficulty], speed_ratio], Vector2(w * 0.5, 143), 14, MUTED)
 		_draw_centered("DESLIZE O DEDO PARA MOVER A RAQUETE", Vector2(w * 0.5, h - 31), 14, MUTED)
 		if _serve_countdown > 0.0:
 			_draw_centered("PREPARE-SE", Vector2(w * 0.5, h * 0.39), 26, WHITE)
@@ -225,6 +242,7 @@ func _reset_positions() -> void:
 	player_y = size.y * 0.5
 	cpu_y = size.y * 0.5
 	_cpu_target_y = cpu_y
+	_cpu_aim_bias = 0.0
 	ball_position = size * 0.5
 	ball_velocity = Vector2.ZERO
 	_trail.clear()
@@ -240,7 +258,16 @@ func _reset_round(direction: float) -> void:
 func _launch_ball() -> void:
 	var angle := randf_range(-0.55, 0.55)
 	ball_velocity = Vector2(cos(angle) * _serve_direction, sin(angle)) * BASE_BALL_SPEED
+	if _serve_direction > 0.0:
+		_cpu_aim_bias = randf_range(-CPU_ERROR[difficulty], CPU_ERROR[difficulty])
+		_cpu_reaction_timer = CPU_REACTION[difficulty]
 	_play_sound("serve")
+
+
+func _accelerate_ball(delta: float) -> void:
+	var speed := ball_velocity.length()
+	if speed > 0.0 and speed < MAX_BALL_SPEED:
+		ball_velocity *= minf(speed + BALL_ACCELERATION * delta, MAX_BALL_SPEED) / speed
 
 
 func _bounce_from_paddle(is_player: bool) -> void:
@@ -248,9 +275,14 @@ func _bounce_from_paddle(is_player: bool) -> void:
 	var offset := clampf((ball_position.y - paddle_center) / (PADDLE_HEIGHT * 0.5), -1.0, 1.0)
 	var angle := offset * 0.98
 	var direction := 1.0 if is_player else -1.0
-	var speed := minf(ball_velocity.length() * 1.065, MAX_BALL_SPEED)
+	var speed := minf(ball_velocity.length() + PADDLE_SPEED_BONUS, MAX_BALL_SPEED)
 	ball_velocity = Vector2(direction * cos(angle), sin(angle)) * speed
-	_cpu_reaction_timer = 0.0
+	if is_player:
+		# O erro é sorteado uma vez por devolução, sem teletransporte da mira.
+		_cpu_aim_bias = randf_range(-CPU_ERROR[difficulty], CPU_ERROR[difficulty])
+		_cpu_reaction_timer = CPU_REACTION[difficulty]
+	else:
+		_cpu_reaction_timer = 0.0
 	_play_sound("paddle")
 
 
@@ -261,12 +293,13 @@ func _update_cpu(delta: float) -> void:
 		if ball_velocity.x > 0.0:
 			var destination_x := size.x - PADDLE_MARGIN
 			var flight_time := maxf(0.0, (destination_x - ball_position.x) / ball_velocity.x)
+			flight_time = minf(flight_time, CPU_LOOKAHEAD[difficulty])
 			var top := FIELD_MARGIN + BALL_RADIUS
 			var span := size.y - 2.0 * top
 			var projected_y := ball_position.y + flight_time * ball_velocity.y
 			var mirrored := fposmod(projected_y - top, span * 2.0)
 			_cpu_target_y = top + (mirrored if mirrored <= span else span * 2.0 - mirrored)
-			_cpu_target_y += randf_range(-CPU_ERROR[difficulty], CPU_ERROR[difficulty])
+			_cpu_target_y += _cpu_aim_bias
 		else:
 			_cpu_target_y = size.y * 0.5 + randf_range(-30.0, 30.0)
 	var step: float = CPU_SPEEDS[difficulty] * delta
