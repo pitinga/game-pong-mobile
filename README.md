@@ -62,6 +62,8 @@ godot --headless --path . --export-debug "Android Pro" build/pong-mobile-pro-deb
 
 Os commits na branch `main` executam testes e **compilam dois APKs de teste para validação**, mas **não os disponibilizam como artefatos**: o repositório é público e qualquer pessoa com acesso de leitura poderia baixar APKs publicados pelo GitHub Actions. Para obter um APK para instalação manual, exporte-o localmente pelos comandos acima, ou use um processo de distribuição **fora deste repositório público**, com acesso privado. APKs de debug **não** são para publicação na Play Store. Free e Pro possuem identificadores diferentes e podem coexistir no mesmo celular.
 
+O workflow **Limpar artefatos públicos antigos** exclui os artefatos de execuções anteriores após a adoção desta política (e pode ser acionado manualmente por colaboradores autorizados). A exclusão é permanente; se precisar de um APK, será necessário recompilá-lo. O código-fonte, as capturas já commitadas e o histórico/logs do Actions permanecem públicos.
+
 **Atenção:** a chave de assinatura de debug é criada em cada execução do GitHub Actions. Para instalar um APK de uma nova execução sobre o anterior, pode ser necessário desinstalar a versão antiga primeiro, o que apaga os dados locais do app.
 
 ## Google Play (AAB de publicação)
