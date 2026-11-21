@@ -7,7 +7,7 @@ Preparação da publicação Android. Conferir os itens antes de enviar pelo Pla
 - Nome do jogo: **Pong Mobile**
 - Categoria sugerida: **Jogos → Arcade**
 - Pacote Android (identificador definitivo): **com.pitinga.pongmobile**
-- Versão preparada: **0.3.3** (código 7)
+- Versão preparada: **0.3.4** (código 8)
 - Android mínimo: **7.0 / API 24**
 - Android alvo: **16 / API 36**
 - Arquitetura: **ARM64**

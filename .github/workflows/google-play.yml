@@ -48,6 +48,9 @@ jobs:
         run: |
           godot --headless --path . --editor --import --quit
           godot --headless --path . --script res://tests/test_pong.gd
+          godot --headless --path . --script res://tests/test_p1_regressions.gd
+          godot --headless --path . --script res://tests/test_ad_lifecycle.gd
+          godot --headless --path . --script res://tests/test_aspect_matrix.gd
 
       - name: Configurar exportador Android
         shell: bash

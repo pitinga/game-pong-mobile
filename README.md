@@ -18,6 +18,7 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 - **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e intersticiais preparados **somente ao encerrar partidas**, a cada 4 partidas concluídas, com intervalo mínimo de 10 minutos e teto de **6 anúncios em qualquer janela de 60 minutos**. Nunca há anúncio na primeira partida, durante o jogo ou em pausa.
 - A Free guarda localmente a contagem de partidas concluídas e os limites de frequência entre reinicializações, sem identificador pessoal, rede ou SDK de anúncios na versão atual. Se não houver anúncio disponível, o jogador continua normalmente e a oportunidade fica para um próximo encerramento.
 - A interface usa `stretch/aspect=expand` para ocupar telas mais largas ou altas que 16:9; toques da interface (como Pausar) não movimentam a raquete.
+- Colisão de bola/raquete com varredura do círculo e contatos nos cantos (inclusive raquete em movimento), sem resgatar bola já atrás da face. Multitouch fixa um dedo por raquete: atravessar o centro não troca o jogador; um novo toque é necessário após ponto ou pausa.
 
 ## Executar
 
@@ -36,6 +37,9 @@ godot --path .
 ```bash
 godot --headless --path . --editor --import --quit
 godot --headless --path . --script res://tests/test_pong.gd
+godot --headless --path . --script res://tests/test_p1_regressions.gd
+godot --headless --path . --script res://tests/test_ad_lifecycle.gd
+godot --headless --path . --script res://tests/test_aspect_matrix.gd
 ```
 
 ## Android (APK de teste)
@@ -81,7 +85,9 @@ O workflow **AAB Google Play** executa automaticamente uma compilação de **val
 
 **Nunca** envie o arquivo de keystore nem suas senhas ao GitHub como código, nem os cole nesta conversa. Guarde uma cópia segura da chave. O identificador do pacote será definitivo depois da publicação.
 
-**Publicidade Free:** a política de frequência e o gatilho de fim de partida já são testados, incluindo um adaptador simulado de anúncios. **Não há SDK AdMob instalado nem anúncio ativo**. O ponto de integração do adaptador está em `scripts/pong.gd` (`set_interstitial_adapter`). Não publicar a Free afirmando conter anúncios antes de completar [a integração e as declarações necessárias](store/admob-setup.md). Nunca publicar IDs de anúncios de teste como se fossem IDs de produção. A Pro permanece sem SDK de publicidade.
+**Publicidade Free:** a política de frequência e o ciclo assíncrono por ID de solicitação já são testados com adaptadores simulados, incluindo timeout, cancelamento seguro e callbacks antigos. **Não há SDK AdMob instalado nem anúncio ativo**. O ponto de integração do adaptador está em `scripts/pong.gd` (`set_interstitial_adapter`). Não publicar a Free afirmando conter anúncios antes de completar [a integração e as declarações necessárias](store/admob-setup.md). Nunca publicar IDs de anúncios de teste como se fossem IDs de produção. A Pro permanece sem SDK de publicidade.
+
+As decisões de jogabilidade ainda em aberto e o resultado da matriz de proporções estão em [Revisão técnica / decisões](docs/technical-review-2026-11-21.md). Mudanças de balanceamento devem ser validadas em Android real antes da publicação.
 
 **Link para a Pro:** o botão da Free ainda informa "em breve". Depois de a ficha Pro estar pública, ativar a feature tag `pong_pro_store_live` no preset Free para habilitar o link oficial à Play Store.
 
@@ -103,6 +109,9 @@ scenes/main.tscn            Cena principal
 scripts/pong.gd             Interface, física, IA, modos e estatísticas
 scripts/ad_policy.gd        Regras de frequência de anúncios Free
 tests/test_pong.gd          Testes de jogabilidade, edições e anúncios
+tests/test_p1_regressions.gd  Regressões de colisão e dedos simultâneos
+tests/test_ad_lifecycle.gd   Regressões de callbacks assíncronos de publicidade
+tests/test_aspect_matrix.gd  Matriz headless de proporções lógicas
 export_presets.cfg          Presets de exportação Free e Pro
 .github/workflows/          Testes, APKs e AABs
 docs/                      Políticas de privacidade Free e Pro

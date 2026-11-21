@@ -3,7 +3,7 @@
 ## Estado atual
 
 - A lógica de oportunidade de intersticiais **está implementada e testada** em `scripts/ad_policy.gd`: a cada 4 partidas concluídas, mínimo de 10 minutos e máximo de **6 impressões na janela móvel de 60 minutos**.
-- `scripts/pong.gd` oferece intersticial apenas **depois que a partida terminou e a tela final apareceu**, uma tentativa por partida. Não dispara anúncios durante a partida, pausa, primeira partida ou menu.
+- `scripts/pong.gd` oferece intersticial apenas **depois que a partida terminou e a tela final apareceu**, uma tentativa por partida. Não dispara anúncios durante a partida, pausa, primeira partida ou menu. Enquanto a apresentação aceita estiver pendente, os botões de próxima partida/menu ficam indisponíveis até confirmação de fechamento, falha ou cancelamento seguro.
 - O contador e os horários das impressões usam **milissegundos Unix** e persistem localmente em `user://pong_free_ad_policy.cfg`, inclusive entre reinicializações. A Free já guarda apenas a contagem de partidas enquanto o SDK não estiver instalado.
 - **Ainda não existe integração do SDK nativo AdMob**. A Free não exibe anúncios nem utiliza identificador de publicidade nesta versão. O app pode continuar funcionando offline.
 - A edição Pro **não deve conter** SDK, permissões ou inicialização de anúncios. O pacote Android Pro e o preset são distintos.
@@ -16,10 +16,13 @@
 4. Durante testes, utilizar **somente IDs oficiais de teste** (por exemplo, unidade intersticial Android `ca-app-pub-3940256099942544/1033173712`); nunca clicar em anúncios de produção para testar.
 5. Implementar um `Node` adaptador do plugin (apenas Free) com o contrato GDScript abaixo, após concluir inicialização, consentimento e pré-carregamento:
    - `is_interstitial_loaded() -> bool`: só retorna `true` quando há intersticial pronto.
-   - `show_interstitial() -> bool`: solicita exibição **imediata** na tela de fim de partida; retorna `false` em falha, sem consumir a oportunidade. Não enfileirar apresentação para depois.
-   - `signal interstitial_impression`: emitir no callback nativo **`onAdImpression`**. O jogo registra e persiste a impressão nesse instante, nunca no simples pedido de exibição.
-   - `signal interstitial_closed`: emitir no fechamento ou na falha de apresentação, liberando qualquer pedido pendente sem consumo de partida.
-   - Registrar o adaptador via `game.set_interstitial_adapter(adapter)` somente na Free. Sem adaptador, o comportamento é silencioso (sem anúncios). Os testes de `tests/test_pong.gd` mostram a implementação simulada do contrato.
+   - `show_interstitial(request_id: int) -> bool`: inicia uma solicitação **da tela de fim de partida** e retorna `false` se for recusada. Não enfileirar um anúncio para depois de iniciar a próxima partida.
+   - `cancel_interstitial(request_id: int) -> bool`: usado após 8 segundos sem abertura ou impressão. Só retornar `true` se o adaptador **garantir** que essa solicitação não poderá apresentar o anúncio futuramente. Se retornar `false`, o jogo permanece no resultado aguardando callback nativo (segurança antes de liberar a partida).
+   - `signal interstitial_opened(request_id: int)`: emitir ao abrir a tela cheia nativa.
+   - `signal interstitial_impression(request_id: int)`: emitir no callback nativo **`onAdImpression`**. O jogo persiste essa impressão **uma única vez por ID**, mesmo se o callback chegar tarde. Não registrar no simples pedido de exibição.
+   - `signal interstitial_closed(request_id: int)`: emitir ao fechar o anúncio, liberando os botões de partida/menu.
+   - `signal interstitial_failed(request_id: int)`: emitir se a apresentação falhar, também liberando os botões sem consumir o crédito.
+   - Registrar via `game.set_interstitial_adapter(adapter)` somente na Free. Trocar o adaptador durante uma solicitação exige cancelamento seguro; sem adaptador, não há anúncios. Exemplos de fake: `tests/test_pong.gd` e `tests/test_ad_lifecycle.gd`.
 6. Configurar limite adicional de **6 impressões por hora** no [painel do AdMob](https://support.google.com/admob/answer/6244508) e bloquear categorias inapropriadas para o público esperado.
    - Os limites salvos no dispositivo protegem contra reiniciar o aplicativo para zerar a contagem, mas **não são antifraude**: o relógio pode ser alterado pelo usuário. O limite configurado na rede continua sendo necessário.
 7. Atualizar a política de privacidade Free e o formulário **Segurança dos dados** da Play Store de acordo com as informações coletadas pelo SDK, incluindo consentimento exigido nos países aplicáveis.
