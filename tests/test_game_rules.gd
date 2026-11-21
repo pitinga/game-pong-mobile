@@ -100,7 +100,9 @@ func _run() -> void:
 	_check(reopened._stats["standard_losses"] == 0 and reopened._stats["best_streak"] >= 1, "Recuperação preserva recorde e não cria derrota falsa")
 	reopened.free()
 	for file in [test_settings, test_stats]:
-		if FileAccess.file_exists(file):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(file))
+		for suffix in ["", ".bak", ".tmp"]:
+			var candidate: String = file + suffix
+			if FileAccess.file_exists(candidate):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
 	print("Regras de produto: %d falha(s)." % failures)
 	quit(1 if failures else 0)

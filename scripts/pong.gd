@@ -941,8 +941,8 @@ func _show_interface() -> void:
 
 
 func _load_pro_settings() -> void:
-	var config := ConfigFile.new()
-	if config.load(settings_file) != OK:
+	var config := _load_config_with_backup(settings_file)
+	if config == null:
 		return
 	ball_scale = clampf(float(config.get_value("visual", "ball_scale", 1.0)), 0.7, 1.5)
 	paddle_scale = clampf(float(config.get_value("visual", "paddle_scale", 1.0)), 0.7, 1.5)
@@ -960,13 +960,13 @@ func _save_pro_settings() -> void:
 	config.set_value("visual", "theme", theme_index)
 	config.set_value("rules", "mode", int(match_mode))
 	config.set_value("rules", "points", _points_index())
-	if config.save(settings_file) != OK:
+	if _save_config_with_backup(config, settings_file) != OK:
 		push_warning("Não foi possível guardar a personalização do Pong Pro.")
 
 
 func _load_pro_stats() -> void:
-	var config := ConfigFile.new()
-	if config.load(stats_file) != OK:
+	var config := _load_config_with_backup(stats_file)
+	if config == null:
 		return
 	for key in _stats.keys():
 		_stats[key] = maxi(0, int(config.get_value("stats", key, 0)))
@@ -989,8 +989,40 @@ func _save_pro_stats() -> void:
 	for key in _stats.keys():
 		config.set_value("stats", key, _stats[key])
 	config.set_value("stats", "active_classic_match", _active_classic_match)
-	if config.save(stats_file) != OK:
+	if _save_config_with_backup(config, stats_file) != OK:
 		push_warning("Não foi possível guardar as estatísticas do Pong Pro.")
+
+
+func _load_config_with_backup(path: String) -> ConfigFile:
+	var config := ConfigFile.new()
+	if config.load(path) == OK:
+		return config
+	var backup := ConfigFile.new()
+	if backup.load(path + ".bak") == OK:
+		push_warning("Arquivo local indisponível ou corrompido; recuperando backup: " + path.get_file())
+		return backup
+	return null
+
+
+func _save_config_with_backup(config: ConfigFile, path: String) -> Error:
+	# Salvar temporário no mesmo diretório antes de substituir o arquivo.
+	# Nunca apagar o original se a gravação ou a troca falhar.
+	var temp_path := path + ".tmp"
+	var result := config.save(temp_path)
+	if result != OK:
+		return result
+	if FileAccess.file_exists(path):
+		# Um arquivo já corrompido não pode substituir o último backup válido.
+		var existing := ConfigFile.new()
+		if existing.load(path) == OK:
+			result = DirAccess.copy_absolute(ProjectSettings.globalize_path(path), ProjectSettings.globalize_path(path + ".bak"))
+			if result != OK:
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+				return result
+	result = DirAccess.rename_absolute(ProjectSettings.globalize_path(temp_path), ProjectSettings.globalize_path(path))
+	if result != OK:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+	return result
 
 
 func _record_pro_stats(won: bool) -> void:
@@ -1154,6 +1186,8 @@ func _build_interface() -> void:
 		_pro_button.custom_minimum_size.y = 40
 		_pro_button.add_theme_font_size_override("font_size", 15)
 		menu_content.add_child(_pro_button)
+		# Não oferecer uma ficha da loja que ainda não está publicada.
+		_pro_button.visible = OS.has_feature("pong_pro_store_live") and OS.get_name() == "Android"
 		_pro_button.pressed.connect(_open_pro_store)
 	var privacy_button := _new_button("PRIVACIDADE", GRID, false)
 	privacy_button.custom_minimum_size.y = 36

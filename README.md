@@ -15,7 +15,7 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 - Compatibilidade planejada a partir do **Android 7.0**, apenas **ARM64**.
 - Política de privacidade acessível diretamente pelo menu.
 - **Pro**: modo Sobrevivência, dois jogadores no mesmo celular (duas metades da tela), temas de cores, tamanhos da bola e raquetes de 70% a 150%, botão de restauração dos padrões e estatísticas locais. Abandonar/reiniciar o Clássico ou **encerrar o processo durante uma partida clássica** quebra a sequência de vitórias, **sem adicionar uma derrota**. Pausas temporárias preservam a partida.
-- **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e intersticiais preparados **somente ao encerrar partidas**, a cada 4 partidas concluídas, com intervalo mínimo de 10 minutos e teto de **6 anúncios em qualquer janela de 60 minutos**. Nunca há anúncio na primeira partida, durante o jogo ou em pausa.
+- **Free**: botão para conhecer a Pro **oculto enquanto a ficha Pro não estiver pública** (habilitado pela feature `pong_pro_store_live` no Android), e intersticiais preparados **somente ao encerrar partidas**, a cada 4 partidas concluídas, com intervalo mínimo de 10 minutos e teto de **6 anúncios em qualquer janela de 60 minutos**. Nunca há anúncio na primeira partida, durante o jogo ou em pausa.
 - A Free guarda localmente a contagem de partidas concluídas e os limites de frequência entre reinicializações, sem identificador pessoal, rede ou SDK de anúncios na versão atual. Se não houver anúncio disponível, o jogador continua normalmente e a oportunidade fica para um próximo encerramento.
 - A interface usa `stretch/aspect=expand` para ocupar telas mais largas ou altas que 16:9; toques da interface (como Pausar) não movimentam a raquete.
 - Colisões por tempo de impacto entre bola, paredes, raquetes (inclusive cantos e movimento) e gol, percorrendo o restante do tick após o rebote. **Regra arcade:** uma bola que já está atrás da face da raquete não pode ser resgatada, inclusive ao atravessar a metade traseira da borda superior/inferior.
@@ -44,6 +44,7 @@ godot --headless --path . --script res://tests/test_aspect_matrix.gd
 godot --headless --path . --script res://tests/test_game_rules.gd
 godot --headless --path . --script res://tests/test_collision_timing.gd
 godot --headless --path . --script res://tests/test_sweep_geometry.gd
+godot --headless --path . --script res://tests/test_storage_recovery.gd
 ```
 
 ## Android (APK de teste)
@@ -93,7 +94,7 @@ O workflow **AAB Google Play** executa automaticamente uma compilação de **val
 
 As decisões de jogabilidade e a matriz de proporções estão em [Revisão técnica / decisões](docs/technical-review-2026-11-21.md). A [rodada de correções para nova revisão](docs/review-fixes-2026-11-21.md) detalha as regressões e limitações. Mudanças de balanceamento devem ser validadas em Android real antes da publicação.
 
-**Link para a Pro:** o botão da Free ainda informa "em breve". Depois de a ficha Pro estar pública, ativar a feature tag `pong_pro_store_live` no preset Free para habilitar o link oficial à Play Store.
+**Link para a Pro:** o botão fica oculto na Free até a ficha da Pro estar publicada. Depois, ativar a feature tag `pong_pro_store_live` no preset Free para habilitar o link oficial à Play Store.
 
 ### Materiais para a ficha da loja
 
@@ -119,6 +120,7 @@ tests/test_aspect_matrix.gd  Matriz headless de proporções lógicas
 tests/test_game_rules.gd    Regras de Sobrevivência e sequência de vitórias
 tests/test_collision_timing.gd  Tempo de impacto de paredes, raquetes e gols
 tests/test_sweep_geometry.gd  Oráculo independente da geometria círculo/retângulo
+tests/test_storage_recovery.gd  Backup e recuperação de arquivos Pro corrompidos
 export_presets.cfg          Presets de exportação Free e Pro
 .github/workflows/          Testes, APKs e AABs
 docs/                      Políticas de privacidade Free e Pro

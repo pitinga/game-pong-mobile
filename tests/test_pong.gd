@@ -118,14 +118,17 @@ func _run_tests() -> void:
 	_check(presets.get_value("preset.1.options", "gradle_build/min_sdk", "") == "24" and presets.get_value("preset.1.options", "gradle_build/target_sdk", "") == "36", "Publicação Free mantém Android 7 e alvo API 36")
 	_check(presets.get_value("preset.2.options", "gradle_build/min_sdk", "") == "24" and presets.get_value("preset.2.options", "gradle_build/target_sdk", "") == "36", "Publicação Pro mantém Android 7 e alvo API 36")
 	_check(ProjectSettings.get_setting("display/window/stretch/aspect") == "expand", "Jogo aproveita telas fora do formato 16:9")
+	_check((ProjectSettings.get_setting("application/config/features") as PackedStringArray).has("4.7"), "Projeto declara Godot 4.7, alinhado ao ambiente de CI")
 	# Cada processo tem caminhos exclusivos para execução paralela no mesmo PC.
 	var test_token := "%d_%d_%d" % [OS.get_process_id(), int(Time.get_unix_time_from_system() * 1000000.0), randi()]
 	var test_settings_file := "user://pong_tests_%s_settings.cfg" % test_token
 	var test_stats_file := "user://pong_tests_%s_stats.cfg" % test_token
 	var test_ads_file := "user://pong_tests_%s_ads.cfg" % test_token
 	for test_file in [test_settings_file, test_stats_file, test_ads_file]:
-		if FileAccess.file_exists(test_file):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(test_file))
+		for suffix in ["", ".bak", ".tmp"]:
+			var candidate: String = test_file + suffix
+			if FileAccess.file_exists(candidate):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
 	var game: Control = load("res://scenes/main.tscn").instantiate()
 	game.settings_file = test_settings_file
 	game.stats_file = test_stats_file
@@ -136,25 +139,23 @@ func _run_tests() -> void:
 	_check(game.state == GameScript.GameState.MENU, "Abre no menu inicial")
 	_check(game.difficulty == 1, "Dificuldade padrão é média")
 	_check(not game.is_pro, "Execução padrão é edição Free")
-	_check(game._pro_button != null, "Free divulga Pong Pro no menu")
-	_check((game._menu.get_child(0) as PanelContainer).get_combined_minimum_size().y <= 530.0, "Menu Free com promoção Pro cabe na tela")
+	_check(game._pro_button != null and not game._pro_button.visible, "Free oculta promoção Pro até a ficha estar publicada")
+	_check((game._menu.get_child(0) as PanelContainer).get_combined_minimum_size().y <= 530.0, "Menu Free cabe na tela")
 	game._open_settings()
 	_check(game.state == GameScript.GameState.MENU, "Free não abre a personalização Pro")
-	game._open_pro_store()
-	_check(game._pro_button.text.contains("EM BREVE"), "Free avisa antes de a ficha Pro estar publicada")
 	game._open_privacy()
 	_check(game.state == GameScript.GameState.PRIVACY and game._privacy_menu.visible, "Política de privacidade acessível pelo menu")
 	game._return_to_menu()
 	_check(game.state == GameScript.GameState.MENU, "Volta da privacidade para o menu")
-	game._pro_button.focus_mode = Control.FOCUS_ALL
-	game._pro_button.grab_focus()
+	game._difficulty_buttons[0].focus_mode = Control.FOCUS_ALL
+	game._difficulty_buttons[0].grab_focus()
 	var enter_key := InputEventKey.new()
 	enter_key.keycode = KEY_ENTER
 	enter_key.pressed = true
 	game._input(enter_key)
 	_check(game.state == GameScript.GameState.MENU, "Enter não inicia jogo quando outro botão possui foco")
-	game._pro_button.release_focus()
-	game._pro_button.focus_mode = Control.FOCUS_NONE
+	game._difficulty_buttons[0].release_focus()
+	game._difficulty_buttons[0].focus_mode = Control.FOCUS_NONE
 	game._select_difficulty(2)
 	_check(game.difficulty == 2, "Seleciona dificuldade difícil")
 	game._start_match()
@@ -472,9 +473,11 @@ func _run_tests() -> void:
 	_check(migrated_game._stats["survival_matches"] == 1 and migrated_game._stats["played"] == 3, "Pro migra totais antigos sem perder as partidas de sobrevivência")
 	migrated_game.free()
 	for test_file in [test_settings_file, test_stats_file, test_ads_file]:
-		if FileAccess.file_exists(test_file):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(test_file))
-		_check(not FileAccess.file_exists(test_file), "Apaga arquivo temporário de teste: " + test_file.get_file())
+		for suffix in ["", ".bak", ".tmp"]:
+			var candidate: String = test_file + suffix
+			if FileAccess.file_exists(candidate):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
+			_check(not FileAccess.file_exists(candidate), "Apaga arquivo temporário de teste: " + candidate.get_file())
 	if _failures == 0:
 		print("\nTodos os testes passaram.")
 	else:

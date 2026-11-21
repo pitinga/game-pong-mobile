@@ -184,7 +184,9 @@ func _run() -> void:
 	game.set_physics_process(true)
 	game.free()
 	for file in ["user://pong_p1_%s_settings.cfg" % token, "user://pong_p1_%s_stats.cfg" % token]:
-		if FileAccess.file_exists(file):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(file))
+		for suffix in ["", ".bak", ".tmp"]:
+			var candidate: String = file + suffix
+			if FileAccess.file_exists(candidate):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
 	print("Regressões P1: %d falha(s)." % failures)
 	quit(1 if failures else 0)

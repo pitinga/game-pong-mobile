@@ -32,13 +32,12 @@ Recursos:
 - Visual arcade com efeitos neon e sons.
 - Partidas rápidas para jogar em qualquer lugar.
 - Sem compras internas ou necessidade de cadastro.
-- Opção para conhecer o Pong Mobile Pro na Google Play, sem publicidade e com modos extras.
 
 Escolha a dificuldade, ajuste sua estratégia e desafie o computador!
 
 ## Notas da versão
 
-Versão Free com três dificuldades, aceleração progressiva da bola, controles por toque e divulgação discreta da edição Pro.
+Versão Free com três dificuldades, aceleração progressiva da bola e controles por toque.
 
 ## Dados de segurança (conferir no Play Console)
 
@@ -59,7 +58,7 @@ Versão Free com três dificuldades, aceleração progressiva da bola, controles
 
 - Confirmar o identificador definitivo `com.pitinga.pongmobile` e que o app será gratuito.
 - Integrar o plugin Android AdMob somente à Free, configurar consentimento e testar em aparelho com IDs de teste; configurar IDs reais antes de monetizar.
-- Confirmar que a ficha Pro está pública e habilitar `pong_pro_store_live` no preset Free.
+- Quando a ficha Pro estiver pública, habilitar `pong_pro_store_live` no preset Free e só então divulgar o botão na descrição da loja.
 - Definir o e-mail público de suporte no Play Console.
 - Publicar a política em URL estática pública e adicioná-la à Play Console.
 - Gerar e guardar uma chave de upload privada. **Nunca colocar a chave ou senha no Git.**

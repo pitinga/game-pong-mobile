@@ -110,7 +110,9 @@ func _run() -> void:
 	var stats_path: String = game.stats_file
 	game.free()
 	for path in [settings_path, stats_path]:
-		if FileAccess.file_exists(path):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+		for suffix in ["", ".bak", ".tmp"]:
+			var candidate: String = path + suffix
+			if FileAccess.file_exists(candidate):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
 	print("Tempo de impacto: %d falha(s)." % failures)
 	quit(1 if failures else 0)

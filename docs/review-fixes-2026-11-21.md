@@ -17,6 +17,9 @@ Objetivo: entregar código e regressões para outra rodada de *code review*, **s
 | TEST-01 | Um teste antigo exigia indevidamente perder captura após ponto; outras regras não percorriam o fluxo integrado. | Teste invertido para continuidade; nova suíte de colisão; sobrevivência pelo gol e countdown reais; testes de persistência e recuperação assíncrona. Workflows incluem a nova suíte, mas **não serão disparados nesta branch**. | Seis suítes headless. | Ampliado; aparelhos físicos pendentes. |
 | PERF-01 | Suspeitas de redesenho integral e renderização a altas taxas, sem profiler. | Nenhuma mudança de desempenho deliberada. | Medição p50/p95/p99, 60/90/120 Hz, multitouch e sessão prolongada ainda necessária. | Pendente, sem alegação de melhora de FPS. |
 | REG-FIS-01 | Após a correção anterior, o candidato de contato na face superior/inferior aceitava `front_sign * x >= half_width`, **sem limite máximo horizontal**; gerava falsos rebotes distantes e rejeitava contato verdadeiro no segmento plano. | `_sweep_paddle_contact`: restringir a metade plana frontal ao intervalo `0 <= front_sign * x <= half_width + 0.0001`. Os cantos permanecem sob o teste euclidiano. | `test_sweep_geometry.gd`: quatro contraexemplos simétricos, contatos positivos nas escalas 0,7/1/1,5, 4.050 trajetórias; oráculos independentes para **contatos falsos e perdidos**, superfície de contato e integração com solver. | Corrigido em Godot headless; não validado em Android. |
+| DATA-01 | Configurações e estatísticas Pro eram gravadas diretamente no arquivo principal; corrupção podia apagar personalização, recordes e sequência. | `_save_config_with_backup` grava em `.tmp`, preserva um `.bak` do arquivo principal válido e só depois substitui o principal; `_load_config_with_backup` recupera o backup após falha de leitura. Nunca usa um arquivo principal corrompido como backup. | `test_storage_recovery.gd`: simula corrupção dos dois arquivos, recria a cena, verifica restauração de personalização e histórico, tratamento da partida ativa, manutenção do backup válido e ausência de temporários. | Corrigido nos testes headless; não há garantia de `fsync`/durabilidade contra corte de energia. |
+| STORE-01 | A Free divulgava um botão Pro que poderia apontar para ficha ainda indisponível. | `_build_interface`: botão Pro só visível no Android com feature `pong_pro_store_live`; texto da loja ajustado à publicação futura. | `test_pong.gd`: Free não anuncia a Pro enquanto a feature não for habilitada. | Corrigido; habilitar tag somente depois de publicar a ficha Pro. |
+| BUILD-01 | Projeto declarava Godot 4.4 enquanto workflows usam 4.7.2. | `project.godot`: `config/features` passa para `4.7`; workflows executam a oitava suíte de recuperação. | `test_pong.gd`: verifica a versão declarada; importação do editor e oito suítes headless locais. | Validado localmente; CI remoto depende do PR. |
 
 ## Evidência de execução
 
@@ -32,6 +35,7 @@ godot --headless --path . --script res://tests/test_aspect_matrix.gd
 godot --headless --path . --script res://tests/test_game_rules.gd
 godot --headless --path . --script res://tests/test_collision_timing.gd
 godot --headless --path . --script res://tests/test_sweep_geometry.gd
+godot --headless --path . --script res://tests/test_storage_recovery.gd
 ```
 
 As seis suítes originais retornaram código `0`. Posteriormente, na correção **REG-FIS-01**, o teste geométrico novo apresentou sete asserções falhas antes do ajuste e passou depois dele. O resultado final abrange **sete suítes**. Alguns testes ainda geram avisos `ObjectDB instances were leaked at exit` no encerramento do harness; **não** representam prova de vazamento no Android.
@@ -50,5 +54,12 @@ Um segundo oráculo amostra 160 subdivisões do segmento e exige contato para ap
 - Encerrar o processo em meio a uma partida Clássica é tratado como **abandono ao reabrir**: perde somente a sequência corrente; não incrementa derrotas, não penaliza pausa temporária e preserva o melhor recorde.
 - Não há integração nativa nem ID de produção para anúncios. O adaptador deve provar a segurança de `recover_interstitial`, sem simplesmente ignorar callbacks tardios. Se a camada nativa não puder liberar com segurança, o jogo permanece no resultado com opção de sair do aplicativo.
 - Arquivos de estatísticas ainda usam `ConfigFile.save` diretamente, sem transação/backup atômico. Erros de gravação produzem aviso; tolerância a corrupção/corte de energia e garantias de durabilidade continuam para outra revisão.
+- Preferências e estatísticas Pro agora usam gravação em temporário, backup válido e recuperação após corrupção do arquivo principal. **Isso não garante durabilidade transacional em quedas de energia:** não foi comprovada sincronização em armazenamento físico nem tolerância a interrupção durante a substituição do arquivo.
 - Nenhum APK/AAB foi gerado; não houve teste em Android físico, medição de FPS, teste de interrupção por sistema operacional ou integração com rede de anúncios.
 - Este material é **candidato à revisão**, não sinal verde para a Google Play.
+
+## Complemento para PR de revisão (21/11/2026)
+
+A documentação acima descreve a primeira rodada da branch; nesta rodada, além do ajuste REG-FIS-01, foram tratados **DATA-01, STORE-01 e BUILD-01**. A afirmação anterior de que os workflows *não seriam disparados* e de que não haveria *APK gerado* referia-se apenas à entrega local: **abrir um pull request dispara o workflow `android.yml`, que também exporta APKs de teste como artefatos de CI.** Não foi solicitado AAB de publicação nem integração de anúncios reais.
+
+Comandos executados no Linux (Godot `4.7.2.stable.official.ed1daf0bf`): as **oito suítes listadas acima** retornaram **código de saída 0**, assim como `godot --headless --path . --editor --import --quit`. `test_storage_recovery.gd` imprime erros esperados do parser de `ConfigFile` porque os arquivos são corrompidos deliberadamente; as asserções de recuperação passaram. O resultado final da execução no GitHub Actions deve ser registrado após o disparo do PR. Não houve execução Android física nem profiler.
