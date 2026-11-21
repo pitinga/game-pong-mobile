@@ -100,11 +100,11 @@ func _run_tests() -> void:
 	root.size = Vector2i(960, 540)
 	var presets := ConfigFile.new()
 	_check(presets.load("res://export_presets.cfg") == OK, "Presets Android são válidos")
-	_check(presets.get_value("preset.0", "custom_features", "") == "pong_free" and presets.get_value("preset.1", "custom_features", "") == "pong_free", "APKs e AABs Free usam recurso pong_free")
-	_check(presets.get_value("preset.2", "custom_features", "") == "pong_pro" and presets.get_value("preset.3", "custom_features", "") == "pong_pro", "APKs e AABs Pro usam recurso pong_pro")
-	_check(presets.get_value("preset.0.options", "package/unique_name", "") == "com.pitinga.pongmobile" and presets.get_value("preset.2.options", "package/unique_name", "") == "com.pitinga.pongmobile.pro", "Free e Pro têm pacotes Android distintos")
+	_check(presets.get_value("preset.0", "custom_features", "") == "pong_unified" and presets.get_value("preset.1", "custom_features", "") == "pong_unified", "APK e AAB usam o mesmo código unificado")
+	_check(not presets.has_section("preset.2") and not presets.has_section("preset.3"), "Somente um aplicativo; não há presets Pro separados")
+	_check(presets.get_value("preset.0.options", "package/unique_name", "") == "com.pitinga.pongmobile" and presets.get_value("preset.1.options", "package/unique_name", "") == "com.pitinga.pongmobile", "APK e AAB têm o mesmo identificador Android")
 	var exports_consistent := true
-	for index in range(4):
+	for index in range(2):
 		var values: String = presets.get_value("preset.%d" % index, "exclude_filter", "")
 		exports_consistent = exports_consistent and values.contains("tests/*")
 		var options_section := "preset.%d.options" % index
@@ -112,11 +112,10 @@ func _run_tests() -> void:
 		exports_consistent = exports_consistent and not presets.get_value(options_section, "architectures/armeabi-v7a", true)
 		exports_consistent = exports_consistent and not presets.get_value(options_section, "architectures/x86_64", true)
 	exports_consistent = exports_consistent and presets.get_value("preset.0.options", "version/code", -1) == presets.get_value("preset.1.options", "version/code", -2)
-	exports_consistent = exports_consistent and presets.get_value("preset.2.options", "version/code", -1) == presets.get_value("preset.3.options", "version/code", -2)
-	exports_consistent = exports_consistent and presets.get_value("preset.0.options", "version/name", "") == presets.get_value("preset.2.options", "version/name", "")
+	exports_consistent = exports_consistent and presets.get_value("preset.0.options", "version/name", "") == presets.get_value("preset.1.options", "version/name", "")
+	exports_consistent = exports_consistent and presets.get_value("preset.0.options", "gradle_build/use_gradle_build", false)
 	_check(exports_consistent, "Exports excluem testes, usam somente ARM64 e mantêm versões consistentes")
-	_check(presets.get_value("preset.1.options", "gradle_build/min_sdk", "") == "24" and presets.get_value("preset.1.options", "gradle_build/target_sdk", "") == "36", "Publicação Free mantém Android 7 e alvo API 36")
-	_check(presets.get_value("preset.2.options", "gradle_build/min_sdk", "") == "24" and presets.get_value("preset.2.options", "gradle_build/target_sdk", "") == "36", "Publicação Pro mantém Android 7 e alvo API 36")
+	_check(presets.get_value("preset.1.options", "gradle_build/min_sdk", "") == "24" and presets.get_value("preset.1.options", "gradle_build/target_sdk", "") == "36", "Publicação única mantém Android 7 e alvo API 36")
 	_check(ProjectSettings.get_setting("display/window/stretch/aspect") == "expand", "Jogo aproveita telas fora do formato 16:9")
 	_check((ProjectSettings.get_setting("application/config/features") as PackedStringArray).has("4.7"), "Projeto declara Godot 4.7, alinhado ao ambiente de CI")
 	# Cada processo tem caminhos exclusivos para execução paralela no mesmo PC.
@@ -139,7 +138,7 @@ func _run_tests() -> void:
 	_check(game.state == GameScript.GameState.MENU, "Abre no menu inicial")
 	_check(game.difficulty == 1, "Dificuldade padrão é média")
 	_check(not game.is_pro, "Execução padrão é edição Free")
-	_check(game._pro_button != null and not game._pro_button.visible, "Free oculta promoção Pro até a ficha estar publicada")
+	_check(game._pro_button != null and game._pro_button.visible and game._pro_button.disabled, "Free mostra compra interna Pro, desativada até existir Billing")
 	_check((game._menu.get_child(0) as PanelContainer).get_combined_minimum_size().y <= 530.0, "Menu Free cabe na tela")
 	game._open_settings()
 	_check(game.state == GameScript.GameState.MENU, "Free não abre a personalização Pro")
@@ -448,7 +447,7 @@ func _run_tests() -> void:
 	real_pro.stats_file = test_stats_file
 	root.add_child(real_pro)
 	await process_frame
-	_check(real_pro.is_pro and real_pro._pro_button == null, "Menu Pro não possui botão de compra ou anúncios")
+	_check(real_pro.is_pro and real_pro._pro_button != null and not real_pro._pro_button.visible and real_pro._pro_row.visible, "Menu Pro troca compra interna pelos recursos adquiridos")
 	var pro_fake_ad := FakeInterstitialAdapter.new()
 	pro_fake_ad.game = real_pro
 	real_pro.add_child(pro_fake_ad)

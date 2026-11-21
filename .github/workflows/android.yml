@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   android:
-    name: Godot 4.7.2 · Testes + APK Free e Pro
+    name: Godot 4.7.2 · Testes + APK único
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,7 +34,7 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Pacotes Android necessários
-        run: sdkmanager 'platform-tools' 'build-tools;35.0.1' 'platforms;android-35'
+        run: sdkmanager 'platform-tools' 'build-tools;36.1.0' 'platforms;android-36' 'cmdline-tools;latest'
 
       - name: Godot 4.7.2 e export templates
         uses: chickensoft-games/setup-godot@v2
@@ -56,6 +56,7 @@ jobs:
           godot --headless --path . --script res://tests/test_collision_timing.gd
           godot --headless --path . --script res://tests/test_sweep_geometry.gd
           godot --headless --path . --script res://tests/test_storage_recovery.gd
+          godot --headless --path . --script res://tests/test_pro_billing.gd
 
       - name: Configurar exportador Android do Godot
         shell: bash
@@ -66,26 +67,22 @@ jobs:
           printf 'export/android/java_sdk_path = "%s"\n' "$JAVA_HOME" >> "$settings_file"
           keytool -genkeypair -keystore "$RUNNER_TEMP/pong-debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
 
-      - name: Gerar APKs de teste Free e Pro (ARM64)
+      - name: Gerar APK único de teste (ARM64)
         env:
           GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ runner.temp }}/pong-debug.keystore
           GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
           GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
         run: |
           mkdir -p build
-          godot --headless --path . --export-debug Android build/pong-mobile-free-debug.apk
-          godot --headless --path . --export-debug "Android Pro" build/pong-mobile-pro-debug.apk
-          test -s build/pong-mobile-free-debug.apk
-          test -s build/pong-mobile-pro-debug.apk
+          godot --headless --path . --install-android-build-template --export-debug Android build/pong-mobile-debug.apk
+          test -s build/pong-mobile-debug.apk
 
-      - name: Verificar identidade e arquitetura dos dois APKs
+      - name: Verificar identidade e arquitetura do APK único
         run: |
-          aapt="$ANDROID_SDK_ROOT/build-tools/35.0.1/aapt"
-          "$aapt" dump badging build/pong-mobile-free-debug.apk | grep -q "^package: name='com.pitinga.pongmobile' "
-          "$aapt" dump badging build/pong-mobile-pro-debug.apk | grep -q "^package: name='com.pitinga.pongmobile.pro' "
-          "$aapt" dump badging build/pong-mobile-free-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
-          "$aapt" dump badging build/pong-mobile-pro-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
+          aapt="$ANDROID_SDK_ROOT/build-tools/36.1.0/aapt"
+          "$aapt" dump badging build/pong-mobile-debug.apk | grep -q "^package: name='com.pitinga.pongmobile' "
+          "$aapt" dump badging build/pong-mobile-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
 
       # Repo público: os APKs só existem no runner efêmero.
-      # Nunca publicar Free/Pro em artifacts, releases ou caches públicos.
+      # Nunca publicar APKs em artifacts, releases ou caches públicos.
 

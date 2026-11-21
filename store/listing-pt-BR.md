@@ -7,12 +7,12 @@ Preparação da publicação Android. Conferir os itens antes de enviar pelo Pla
 - Nome do jogo: **Pong Mobile**
 - Categoria sugerida: **Jogos → Arcade**
 - Pacote Android (identificador definitivo): **com.pitinga.pongmobile**
-- Versão preparada: **0.3.5** (código 9)
+- Versão preparada: **0.4.0** (código 10)
 - Android mínimo: **7.0 / API 24**
 - Android alvo: **16 / API 36**
 - Arquitetura: **ARM64**
 - Idioma inicial: **Português (Brasil)**
-- Preço sugerido: **Gratuito**, sem compras internas; publicidade AdMob prevista em futura integração
+- Preço sugerido: **Gratuito**, com compra interna única **Pro (remove_ads)**; publicidade AdMob prevista após integração
 
 ## Descrição curta (até 80 caracteres)
 
@@ -20,7 +20,7 @@ Pong arcade offline com três dificuldades e partidas rápidas contra o computad
 
 ## Descrição completa (até 4.000 caracteres)
 
-Pong Mobile traz o clássico jogo de raquetes para o seu celular em uma experiência simples, rápida e totalmente offline.
+Pong Mobile traz o clássico jogo de raquetes para o seu celular, com partidas rápidas e jogabilidade offline.
 
 Enfrente o computador, devolva a bola e seja o primeiro a marcar 7 pontos!
 
@@ -31,21 +31,24 @@ Recursos:
 - Controle da raquete por toque ou arraste na tela.
 - Visual arcade com efeitos neon e sons.
 - Partidas rápidas para jogar em qualquer lugar.
-- Sem compras internas ou necessidade de cadastro.
+- Desbloqueio Pro permanente, dentro do próprio aplicativo, para jogar sem anúncios.
+- No Pro: Sobrevivência, dois jogadores locais, temas, tamanhos da bola e das raquetes e estatísticas.
+- Sem necessidade de cadastro no jogo; a compra é gerenciada pela Google Play.
 
 Escolha a dificuldade, ajuste sua estratégia e desafie o computador!
 
 ## Notas da versão
 
-Versão Free com três dificuldades, aceleração progressiva da bola e controles por toque.
+Uma única versão Android: gratuito + desbloqueio Pro por compra no aplicativo.
 
 ## Dados de segurança (conferir no Play Console)
 
 - Coleta/compartilhamento: **não na compilação atual, sem SDK de publicidade**. Após integrar AdMob, revisar conforme as práticas reais do SDK.
 - Publicidade: **ainda não ativada**; configurar AdMob e revisar as declarações de conteúdo antes de publicar uma versão com anúncios.
-- Compras no aplicativo: **não**.
+- Compras no aplicativo: **sim**, desbloqueio Pro permanente pela Google Play Billing. Configurar produto não consumível antes de disponibilizar a compra.
 - Login ou conta de jogador: **não**.
-- Contagem local agregada de partidas: **sim**, apenas para respeitar os limites de frequência quando a publicidade for integrada; não contém identificação pessoal nem é transmitida.
+- Contagem local agregada de partidas: **sim**, apenas para limitar publicidade. Preferências Pro, estatísticas e última titularidade confirmada são armazenadas localmente.
+- Pagamentos: processados pela Google Play. Consultar e revisar as declarações de tratamento do SDK e da plataforma antes da publicação.
 - Política de privacidade: `docs/privacy-policy.html` (publicar em URL pública antes do envio).
 
 ## Recursos gráficos
@@ -57,8 +60,10 @@ Versão Free com três dificuldades, aceleração progressiva da bola e controle
 ## Pendências antes de enviar
 
 - Confirmar o identificador definitivo `com.pitinga.pongmobile` e que o app será gratuito.
-- Integrar o plugin Android AdMob somente à Free, configurar consentimento e testar em aparelho com IDs de teste; configurar IDs reais antes de monetizar.
-- Quando a ficha Pro estiver pública, habilitar `pong_pro_store_live` no preset Free e só então divulgar o botão na descrição da loja.
+- Criar produto interno **não consumível** `remove_ads` no mesmo aplicativo, ativar e testar compra, pendência, restauração, atualização e reembolso. Usar somente licenças de teste na validação inicial.
+- Validar o plugin **GodotGooglePlayBilling 3.3.0** em um Android com Google Play e configurar o produto para habilitar a compra.
+- Integrar o SDK AdMob ao aplicativo único, respeitando o direito Pro para não solicitar anúncios; configurar consentimento, testar IDs de teste e ativar IDs reais somente na publicação monetizada.
+- Ativar links "Conheça nossos jogos" apenas para aplicativos já publicados na Play Store.
 - Definir o e-mail público de suporte no Play Console.
 - Publicar a política em URL estática pública e adicioná-la à Play Console.
 - Gerar e guardar uma chave de upload privada. **Nunca colocar a chave ou senha no Git.**

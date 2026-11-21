@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   android_bundle:
-    name: Godot 4.7.2 · AAB Free e Pro · Android 7+ / API 36 / ARM64
+    name: Godot 4.7.2 · AAB único · Android 7+ / API 36 / ARM64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -46,6 +46,7 @@ jobs:
           godot --headless --path . --script res://tests/test_collision_timing.gd
           godot --headless --path . --script res://tests/test_sweep_geometry.gd
           godot --headless --path . --script res://tests/test_storage_recovery.gd
+          godot --headless --path . --script res://tests/test_pro_billing.gd
 
       - name: Configurar exportador Android
         shell: bash
@@ -59,19 +60,16 @@ jobs:
         run: |
           keytool -genkeypair -keystore "$RUNNER_TEMP/pong-upload.jks" -storepass validation-only -keypass validation-only -alias playupload -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=Pong Validation,O=Pitinga,C=BR'
 
-      - name: Validar dois AABs com chave descartável (não publicar)
+      - name: Validar AAB único com chave descartável (não publicar)
         env:
           GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ runner.temp }}/pong-upload.jks
           GODOT_ANDROID_KEYSTORE_RELEASE_USER: playupload
           GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: validation-only
         run: |
           mkdir -p build
-          godot --headless --path . --install-android-build-template --export-release "Google Play" build/pong-mobile-free-release.aab
-          godot --headless --path . --export-release "Google Play Pro" build/pong-mobile-pro-release.aab
-          test -s build/pong-mobile-free-release.aab
-          test -s build/pong-mobile-pro-release.aab
-          jarsigner -verify build/pong-mobile-free-release.aab
-          jarsigner -verify build/pong-mobile-pro-release.aab
+          godot --headless --path . --install-android-build-template --export-release "Google Play" build/pong-mobile-release.aab
+          test -s build/pong-mobile-release.aab
+          jarsigner -verify build/pong-mobile-release.aab
 
       # Por segurança, o workflow público não acessa chaves reais de publicação,
       # não cria artifacts e não disponibiliza AAB para download.
