@@ -8,6 +8,7 @@ const AdPolicy = preload("res://scripts/ad_policy.gd")
 const PRO_STORE_URL := "https://play.google.com/store/apps/details?id=com.pitinga.pongmobile.pro"
 const SETTINGS_FILE := "user://pong_pro_settings.cfg"
 const STATS_FILE := "user://pong_pro_stats.cfg"
+const AD_POLICY_FILE := "user://pong_free_ad_policy.cfg"
 
 const BG := Color("#081526")
 const GRID := Color("#183047")
@@ -40,6 +41,10 @@ const THEMES := [
 ]
 
 var is_pro := OS.has_feature("pong_pro")
+# Caminhos substituiveis nos testes: nunca gravar nas preferencias reais.
+var settings_file := SETTINGS_FILE
+var stats_file := STATS_FILE
+var ad_policy_file := AD_POLICY_FILE
 var match_mode: MatchMode = MatchMode.CLASSIC
 var point_limit := WIN_SCORE
 var ball_scale := 1.0
@@ -47,8 +52,8 @@ var paddle_scale := 1.0
 var theme_index := 0
 var survival_hits := 0
 var _stats := {
-	"played": 0, "wins": 0, "losses": 0, "streak": 0,
-	"best_streak": 0, "best_survival": 0, "two_player_matches": 0,
+	"played": 0, "streak": 0,
+	"best_streak": 0, "best_survival": 0, "survival_matches": 0, "two_player_matches": 0,
 	"standard_wins": 0, "standard_losses": 0,
 	"custom_wins": 0, "custom_losses": 0,
 }
@@ -97,11 +102,13 @@ func _ready() -> void:
 	if is_pro:
 		_load_pro_settings()
 		_load_pro_stats()
+	else:
+		_ad_policy.load_state(ad_policy_file)
 	_build_sounds()
 	_build_interface()
 	_reset_positions()
 	_show_interface()
-	resized.connect(queue_redraw)
+	resized.connect(_on_resized)
 	queue_redraw()
 
 
@@ -191,28 +198,55 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			elif state in [GameState.PRIVACY, GameState.SETTINGS, GameState.STATS]:
 				_return_to_menu()
+				get_viewport().set_input_as_handled()
 			return
-		if event.keycode == KEY_ENTER and state == GameState.MENU:
+		if event.keycode == KEY_ENTER and state == GameState.MENU and get_viewport().gui_get_focus_owner() == null:
 			_start_match()
+			get_viewport().set_input_as_handled()
 			return
 
+
+func _unhandled_input(event: InputEvent) -> void:
 	if state != GameState.PLAYING:
 		return
 
-	if event is InputEventScreenTouch and event.pressed:
-		_set_touch_paddle(event.position)
+	var move_paddle := false
+	if event is InputEventScreenTouch:
+		move_paddle = event.pressed
 	elif event is InputEventScreenDrag:
-		_set_touch_paddle(event.position)
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		_set_touch_paddle(event.position)
-	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		_set_touch_paddle(event.position)
+		move_paddle = true
+	elif event is InputEventMouseButton:
+		move_paddle = event.button_index == MOUSE_BUTTON_LEFT and event.pressed
+	elif event is InputEventMouseMotion:
+		move_paddle = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not move_paddle:
+		return
+
+	# A GUI recebe primeiro; o retangulo de pausa protege tambem eventos
+	# que possam passar pela GUI em dispositivos especificos.
+	if _pause_button.visible and _pause_button.get_global_rect().has_point(event.position):
+		return
+	var local_event := make_input_local(event)
+	_set_touch_paddle(local_event.position)
+	get_viewport().set_input_as_handled()
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_PAUSED and state == GameState.PLAYING:
+	if what in [NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT] and state == GameState.PLAYING:
 		state = GameState.PAUSED
 		_show_interface()
+
+
+func _on_resized() -> void:
+	if size.x <= 0.0 or size.y <= 0.0:
+		return
+	_set_player_y(player_y)
+	_set_cpu_y(cpu_y)
+	_cpu_target_y = clampf(_cpu_target_y, FIELD_MARGIN, size.y - FIELD_MARGIN)
+	ball_position = ball_position.clamp(Vector2.ZERO, size)
+	if state == GameState.MENU:
+		ball_position = size * 0.5
+	queue_redraw()
 
 
 func _draw() -> void:
@@ -438,6 +472,8 @@ func _complete_match(won: bool) -> void:
 		_record_pro_stats(won)
 	else:
 		_ad_policy.note_finished_match()
+		if _ad_policy.save_state(ad_policy_file) != OK:
+			push_warning("Não foi possível guardar o limite local de anúncios.")
 		# O adaptador AdMob será conectado quando a conta e os IDs estiverem disponíveis.
 		# Nenhum anúncio é solicitado no momento, evitando publicidade de teste em produção.
 	_show_interface()
@@ -502,7 +538,7 @@ func _show_interface() -> void:
 
 func _load_pro_settings() -> void:
 	var config := ConfigFile.new()
-	if config.load(SETTINGS_FILE) != OK:
+	if config.load(settings_file) != OK:
 		return
 	ball_scale = clampf(float(config.get_value("visual", "ball_scale", 1.0)), 0.7, 1.5)
 	paddle_scale = clampf(float(config.get_value("visual", "paddle_scale", 1.0)), 0.7, 1.5)
@@ -520,23 +556,28 @@ func _save_pro_settings() -> void:
 	config.set_value("visual", "theme", theme_index)
 	config.set_value("rules", "mode", int(match_mode))
 	config.set_value("rules", "points", _points_index())
-	if config.save(SETTINGS_FILE) != OK:
+	if config.save(settings_file) != OK:
 		push_warning("Não foi possível guardar a personalização do Pong Pro.")
 
 
 func _load_pro_stats() -> void:
 	var config := ConfigFile.new()
-	if config.load(STATS_FILE) != OK:
+	if config.load(stats_file) != OK:
 		return
 	for key in _stats.keys():
 		_stats[key] = maxi(0, int(config.get_value("stats", key, 0)))
+	# Compatibilidade com instalações antigas que só guardavam o total.
+	if not config.has_section_key("stats", "survival_matches"):
+		var classic_count := int(_stats["standard_wins"]) + int(_stats["standard_losses"]) + int(_stats["custom_wins"]) + int(_stats["custom_losses"])
+		_stats["survival_matches"] = maxi(0, int(_stats["played"]) - classic_count - int(_stats["two_player_matches"]))
+	_stats["played"] = _count_pro_matches()
 
 
 func _save_pro_stats() -> void:
 	var config := ConfigFile.new()
 	for key in _stats.keys():
 		config.set_value("stats", key, _stats[key])
-	if config.save(STATS_FILE) != OK:
+	if config.save(stats_file) != OK:
 		push_warning("Não foi possível guardar as estatísticas do Pong Pro.")
 
 
@@ -544,21 +585,24 @@ func _record_pro_stats(won: bool) -> void:
 	_stats["played"] += 1
 	match match_mode:
 		MatchMode.SURVIVAL:
+			_stats["survival_matches"] += 1
 			_stats["best_survival"] = maxi(int(_stats["best_survival"]), survival_hits)
 		MatchMode.TWO_PLAYERS:
 			_stats["two_player_matches"] += 1
 		MatchMode.CLASSIC:
 			var stat_prefix := "standard" if _is_standard_rules() else "custom"
 			if won:
-				_stats["wins"] += 1
 				_stats[stat_prefix + "_wins"] += 1
 				_stats["streak"] += 1
 				_stats["best_streak"] = maxi(int(_stats["best_streak"]), int(_stats["streak"]))
 			else:
-				_stats["losses"] += 1
 				_stats[stat_prefix + "_losses"] += 1
 				_stats["streak"] = 0
 	_save_pro_stats()
+
+
+func _count_pro_matches() -> int:
+	return int(_stats["standard_wins"]) + int(_stats["standard_losses"]) + int(_stats["custom_wins"]) + int(_stats["custom_losses"]) + int(_stats["survival_matches"]) + int(_stats["two_player_matches"])
 
 
 func _is_standard_rules() -> bool:
@@ -566,11 +610,12 @@ func _is_standard_rules() -> bool:
 
 
 func _refresh_stats() -> void:
-	_stats_text.text = "PARTIDAS TOTAIS: %d\nCLÁSSICO PADRÃO: %dV / %dD\nCLÁSSICO PERSONALIZADO: %dV / %dD\nSEQUÊNCIA ATUAL: %d\nMELHOR SEQUÊNCIA: %d\nRECORDE SOBREVIVÊNCIA: %d\nPARTIDAS COM 2 JOGADORES: %d" % [
+	_stats_text.text = "PARTIDAS TOTAIS: %d\nCLÁSSICO PADRÃO: %dV / %dD\nCLÁSSICO PERSONALIZADO: %dV / %dD\nPARTIDAS DE SOBREVIVÊNCIA: %d\nPARTIDAS COM 2 JOGADORES: %d\nSEQUÊNCIA ATUAL: %d\nMELHOR SEQUÊNCIA: %d\nRECORDE SOBREVIVÊNCIA: %d" % [
 		_stats["played"], _stats["standard_wins"], _stats["standard_losses"],
 		_stats["custom_wins"], _stats["custom_losses"],
+		_stats["survival_matches"], _stats["two_player_matches"],
 		_stats["streak"], _stats["best_streak"],
-		_stats["best_survival"], _stats["two_player_matches"]
+		_stats["best_survival"]
 	]
 
 

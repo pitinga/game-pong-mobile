@@ -16,6 +16,8 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 - Política de privacidade acessível diretamente pelo menu.
 - **Pro**: modo Sobrevivência, dois jogadores no mesmo celular (duas metades da tela), temas de cores, tamanhos da bola e raquetes de 70% a 150%, botão de restauração dos padrões e estatísticas locais.
 - **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e regra preparada para intersticiais após 4 partidas, intervalo mínimo de 10 minutos e teto de 2 anúncios/hora.
+- A Free guarda somente a contagem local de partidas concluídas para preservar esse limite entre reinicializações, sem identificador pessoal, rede ou SDK de anúncios na versão atual.
+- A interface usa `stretch/aspect=expand` para ocupar telas mais largas ou altas que 16:9; toques da interface (como Pausar) não movimentam a raquete.
 
 ## Executar
 

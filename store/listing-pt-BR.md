@@ -7,7 +7,7 @@ Preparação da publicação Android. Conferir os itens antes de enviar pelo Pla
 - Nome do jogo: **Pong Mobile**
 - Categoria sugerida: **Jogos → Arcade**
 - Pacote Android (identificador definitivo): **com.pitinga.pongmobile**
-- Versão preparada: **0.3.0** (código 4)
+- Versão preparada: **0.3.2** (código 6)
 - Android mínimo: **7.0 / API 24**
 - Android alvo: **16 / API 36**
 - Arquitetura: **ARM64**
@@ -46,6 +46,7 @@ Versão Free com três dificuldades, aceleração progressiva da bola, controles
 - Publicidade: **ainda não ativada**; configurar AdMob e revisar as declarações de conteúdo antes de publicar uma versão com anúncios.
 - Compras no aplicativo: **não**.
 - Login ou conta de jogador: **não**.
+- Contagem local agregada de partidas: **sim**, apenas para respeitar os limites de frequência quando a publicidade for integrada; não contém identificação pessoal nem é transmitida.
 - Política de privacidade: `docs/privacy-policy.html` (publicar em URL pública antes do envio).
 
 ## Recursos gráficos

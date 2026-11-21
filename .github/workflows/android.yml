@@ -63,6 +63,14 @@ jobs:
           test -s build/pong-mobile-free-debug.apk
           test -s build/pong-mobile-pro-debug.apk
 
+      - name: Verificar identidade e arquitetura dos dois APKs
+        run: |
+          aapt="$ANDROID_SDK_ROOT/build-tools/35.0.1/aapt"
+          "$aapt" dump badging build/pong-mobile-free-debug.apk | grep -q "^package: name='com.pitinga.pongmobile' "
+          "$aapt" dump badging build/pong-mobile-pro-debug.apk | grep -q "^package: name='com.pitinga.pongmobile.pro' "
+          "$aapt" dump badging build/pong-mobile-free-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
+          "$aapt" dump badging build/pong-mobile-pro-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
+
       - name: Publicar os dois APKs como artefatos
         uses: actions/upload-artifact@v6
         with:
