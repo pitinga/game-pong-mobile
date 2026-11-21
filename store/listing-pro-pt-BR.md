@@ -1,7 +1,7 @@
 # Pong Mobile Pro — ficha de publicação (pt-BR)
 
 - Pacote: `com.pitinga.pongmobile.pro` — confirmar ANTES de criar o app no Play Console.
-- Versão: `0.3.0`, código `1`.
+- Versão: `0.3.1`, código `2`.
 - Categoria: Jogos → Arcade.
 - Formato: Android App Bundle (AAB), Android 7 / API 24+, ARM64, alvo API 36.
 - Monetização: compra única do aplicativo, sem anúncios nem compras internas.

@@ -244,7 +244,7 @@ func _draw() -> void:
 	_draw_centered(str(survival_hits).pad_zeros(2) if match_mode == MatchMode.SURVIVAL else str(player_score).pad_zeros(2), Vector2(w * 0.42, 79), 54, CYAN)
 	_draw_centered(str(cpu_score).pad_zeros(2), Vector2(w * 0.58, 79), 54, PINK)
 	_draw_centered("REBATIDAS" if match_mode == MatchMode.SURVIVAL else "P1" if match_mode == MatchMode.TWO_PLAYERS else "VOCÊ", Vector2(w * 0.42, 106), 13, MUTED)
-	_draw_centered("P2" if match_mode == MatchMode.TWO_PLAYERS else "CPU", Vector2(w * 0.58, 106), 13, MUTED)
+	_draw_centered("P2" if match_mode == MatchMode.TWO_PLAYERS else "COMPUTADOR", Vector2(w * 0.58, 106), 13, MUTED)
 	if state == GameState.PLAYING:
 		var speed_ratio := maxf(1.0, ball_velocity.length() / BASE_BALL_SPEED)
 		_draw_centered("2 JOGADORES   •   BOLA %.1fx" % speed_ratio if match_mode == MatchMode.TWO_PLAYERS else "NÍVEL %s   •   BOLA %.1fx" % [DIFFICULTIES[difficulty], speed_ratio], Vector2(w * 0.5, 143), 14, MUTED)
@@ -311,6 +311,25 @@ func _paddle_height() -> float:
 	return PADDLE_HEIGHT * paddle_scale
 
 
+func _cpu_reach_factor() -> float:
+	# Raquetes/bolas pequenas reduzem a margem de colisao. Compensar parte
+	# dessa perda evita mudar a dificuldade da IA ao personalizar a Pro.
+	var standard_margin := PADDLE_HEIGHT * 0.5 + BALL_RADIUS
+	var actual_margin := _paddle_height() * 0.5 + _ball_radius()
+	return clampf(standard_margin / maxf(actual_margin, 1.0), 1.0, 1.25)
+
+
+func _cpu_aim_error() -> float:
+	# O erro da mira deve acompanhar a zona de acerto, nao ter pixels fixos.
+	var standard_margin := PADDLE_HEIGHT * 0.5 + BALL_RADIUS
+	var actual_margin := _paddle_height() * 0.5 + _ball_radius()
+	return CPU_ERROR[difficulty] * minf(1.0, actual_margin / standard_margin)
+
+
+func _cpu_reaction_delay() -> float:
+	return CPU_REACTION[difficulty] / _cpu_reach_factor()
+
+
 func _reset_positions() -> void:
 	player_y = size.y * 0.5
 	cpu_y = size.y * 0.5
@@ -332,8 +351,8 @@ func _launch_ball() -> void:
 	var angle := randf_range(-0.55, 0.55)
 	ball_velocity = Vector2(cos(angle) * _serve_direction, sin(angle)) * BASE_BALL_SPEED
 	if _serve_direction > 0.0:
-		_cpu_aim_bias = randf_range(-CPU_ERROR[difficulty], CPU_ERROR[difficulty])
-		_cpu_reaction_timer = CPU_REACTION[difficulty]
+		_cpu_aim_bias = randf_range(-_cpu_aim_error(), _cpu_aim_error())
+		_cpu_reaction_timer = _cpu_reaction_delay()
 	_play_sound("serve")
 
 
@@ -354,8 +373,8 @@ func _bounce_from_paddle(is_player: bool) -> void:
 		survival_hits += 1
 	if is_player:
 		# O erro é sorteado uma vez por devolução, sem teletransporte da mira.
-		_cpu_aim_bias = randf_range(-CPU_ERROR[difficulty], CPU_ERROR[difficulty])
-		_cpu_reaction_timer = CPU_REACTION[difficulty]
+		_cpu_aim_bias = randf_range(-_cpu_aim_error(), _cpu_aim_error())
+		_cpu_reaction_timer = _cpu_reaction_delay()
 	else:
 		_cpu_reaction_timer = 0.0
 	_play_sound("paddle")
@@ -364,20 +383,22 @@ func _bounce_from_paddle(is_player: bool) -> void:
 func _update_cpu(delta: float) -> void:
 	_cpu_reaction_timer -= delta
 	if _cpu_reaction_timer <= 0.0:
-		_cpu_reaction_timer = CPU_REACTION[difficulty]
+		_cpu_reaction_timer = _cpu_reaction_delay()
 		if ball_velocity.x > 0.0:
-			var destination_x := size.x - PADDLE_MARGIN
+			# Prever o impacto na FACE da raquete, considerando o raio real
+			# da bola. A previsao antiga mirava no centro da raquete.
+			var destination_x := size.x - PADDLE_MARGIN - PADDLE_WIDTH * 0.5 - _ball_radius()
 			var flight_time := maxf(0.0, (destination_x - ball_position.x) / ball_velocity.x)
-			flight_time = minf(flight_time, CPU_LOOKAHEAD[difficulty])
+			flight_time = minf(flight_time, CPU_LOOKAHEAD[difficulty] * _cpu_reach_factor())
 			var top := FIELD_MARGIN + _ball_radius()
-			var span := size.y - 2.0 * top
+			var span := maxf(1.0, size.y - 2.0 * top)
 			var projected_y := ball_position.y + flight_time * ball_velocity.y
 			var mirrored := fposmod(projected_y - top, span * 2.0)
 			_cpu_target_y = top + (mirrored if mirrored <= span else span * 2.0 - mirrored)
 			_cpu_target_y += _cpu_aim_bias
 		else:
 			_cpu_target_y = size.y * 0.5 + randf_range(-30.0, 30.0)
-	var step: float = CPU_SPEEDS[difficulty] * delta
+	var step: float = CPU_SPEEDS[difficulty] * _cpu_reach_factor() * delta
 	cpu_y = move_toward(cpu_y, clampf(_cpu_target_y, FIELD_MARGIN + _paddle_height() * 0.5, size.y - FIELD_MARGIN - _paddle_height() * 0.5), step)
 
 
@@ -411,7 +432,7 @@ func _complete_match(won: bool) -> void:
 		_finish_title.text = "JOGADOR 1 VENCEU!" if won else "JOGADOR 2 VENCEU!"
 		_finish_score.text = "%02d   :   %02d" % [player_score, cpu_score]
 	else:
-		_finish_title.text = "VOCÊ VENCEU!" if won else "CPU VENCEU!"
+		_finish_title.text = "VOCÊ VENCEU!" if won else "COMPUTADOR VENCEU!"
 		_finish_score.text = "%02d   :   %02d" % [player_score, cpu_score]
 	if is_pro:
 		_record_pro_stats(won)
@@ -729,7 +750,7 @@ func _build_interface() -> void:
 	_theme_selector.item_selected.connect(_select_theme)
 	_add_label(settings_content, "MODO DE JOGO", 14, MUTED)
 	_mode_selector = _new_option(settings_content)
-	for mode_name in ["CLÁSSICO VS CPU", "SOBREVIVÊNCIA", "2 JOGADORES LOCAIS"]:
+	for mode_name in ["CLÁSSICO VS COMPUTADOR", "SOBREVIVÊNCIA", "2 JOGADORES LOCAIS"]:
 		_mode_selector.add_item(mode_name)
 	_mode_selector.select(int(match_mode))
 	_mode_selector.item_selected.connect(_set_mode)

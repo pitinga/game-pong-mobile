@@ -16,7 +16,7 @@ Preparação da publicação Android. Conferir os itens antes de enviar pelo Pla
 
 ## Descrição curta (até 80 caracteres)
 
-Pong arcade offline com três dificuldades e partidas rápidas contra a CPU.
+Pong arcade offline com três dificuldades e partidas rápidas contra o computador.
 
 ## Descrição completa (até 4.000 caracteres)
 
@@ -34,7 +34,7 @@ Recursos:
 - Sem compras internas ou necessidade de cadastro.
 - Opção para conhecer o Pong Mobile Pro na Google Play, sem publicidade e com modos extras.
 
-Escolha a dificuldade, ajuste sua estratégia e desafie a CPU!
+Escolha a dificuldade, ajuste sua estratégia e desafie o computador!
 
 ## Notas da versão
 

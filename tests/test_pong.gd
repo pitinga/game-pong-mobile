@@ -122,6 +122,7 @@ func _run_tests() -> void:
 	for i in range(game.WIN_SCORE):
 		game._score_point(false)
 	_check(game.state == GameScript.GameState.FINISHED and not game.player_won, "Reconhece vitória da CPU")
+	_check(game._finish_title.text == "COMPUTADOR VENCEU!", "Placar final chama adversário de Computador")
 	game._return_to_menu()
 	_check(game.state == GameScript.GameState.MENU and game.player_score == 0, "Volta ao menu e limpa o placar")
 
@@ -151,6 +152,29 @@ func _run_tests() -> void:
 	game._set_paddle_size(150)
 	_check(is_equal_approx(game._ball_radius(), 14.0), "Pro aumenta raio e colisão da bola")
 	_check(is_equal_approx(game._paddle_height(), 150.0), "Pro altera as duas raquetes")
+	_check(game._mode_selector.get_item_text(0) == "CLÁSSICO VS COMPUTADOR", "Modo clássico usa nome Computador")
+	game._set_ball_size(70)
+	game._set_paddle_size(70)
+	game._select_difficulty(1)
+	_check(is_equal_approx(game._cpu_aim_error(), 56.0), "Margem de erro da CPU reduz com bola e raquete menores")
+	_check(is_equal_approx(game._cpu_reach_factor(), 1.25), "CPU compensa alcance menor dentro de limite seguro")
+	_check(_cpu_defends_shot(game, 1, 650.0), "Médio ainda defende lance moderado com bola e raquete a 70%")
+	_check(not _cpu_defends_shot(game, 1, 850.0), "Médio ainda pode sofrer ponto com bola rápida a 70%")
+	game._select_difficulty(2)
+	game._start_match()
+	game._serve_countdown = 0.0
+	game.ball_position = Vector2(800.0, 40.0)
+	game.ball_velocity = Vector2(400.0, -250.0)
+	game._cpu_aim_bias = 0.0
+	game._cpu_reaction_timer = 0.0
+	game._update_cpu(0.0)
+	_check(is_equal_approx(game._cpu_target_y, 66.5625), "CPU prevê rebote e colisão com bola a 70%")
+	game._set_ball_size(150)
+	game._cpu_reaction_timer = 0.0
+	game._update_cpu(0.0)
+	_check(is_equal_approx(game._cpu_target_y, 77.5625), "CPU recalcula rebote e colisão com bola a 150%")
+	game._set_ball_size(140)
+	game._set_paddle_size(150)
 	game._set_player_y(-100)
 	_check(game.player_y >= game.FIELD_MARGIN + 75.0, "Raquete personalizada respeita limites")
 	game._select_theme(2)

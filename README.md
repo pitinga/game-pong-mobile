@@ -5,7 +5,7 @@ Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a
 ## Funcionalidades
 
 - Controle da raquete por **toque/arraste** na tela; no computador, **mouse, W/S ou setas**.
-- Três dificuldades reais para a CPU: **Fácil, Médio e Difícil** (reação, movimento, antecipação e precisão diferentes).
+- Três dificuldades reais para o computador: **Fácil, Médio e Difícil** (reação, movimento, antecipação e precisão diferentes), recalibradas conforme o tamanho personalizado das raquetes e da bola.
 - Bola acelera continuamente durante a disputa **e** após cada rebatida, até um limite; a velocidade reinicia após cada ponto.
 - Indicador na tela mostra o nível atual e a velocidade da bola.
 - Placar até **7 pontos** na Free; a Pro permite 7, 11 ou 21 pontos.
