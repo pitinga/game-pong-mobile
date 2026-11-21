@@ -1,0 +1,27 @@
+; Pong Mobile - projeto Godot 4
+config_version=5
+
+[application]
+
+config/name="Pong Mobile"
+run/main_scene="res://scenes/main.tscn"
+config/icon="res://assets/icon.svg"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+config/description="Pong para um jogador contra o computador."
+
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=540
+window/size/window_width_override=960
+window/size/window_height_override=540
+window/stretch/mode="canvas_items"
+window/handheld/orientation=0
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.027, 0.047, 0.086, 1)
+

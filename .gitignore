@@ -1,0 +1,18 @@
+# Cache e arquivos gerados pelo editor Godot
+.godot/
+.import/
+*.translation
+
+# Arquivos exportados e dados locais de assinatura
+build/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Arquivos locais de IDE e SO
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+

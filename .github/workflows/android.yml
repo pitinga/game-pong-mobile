@@ -1,0 +1,70 @@
+name: Testes e APK Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Godot 4.7.2 · Testes + APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Java 17 (compatibilidade com Godot Android)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Pacotes Android necessários
+        run: sdkmanager 'platform-tools' 'build-tools;35.0.1' 'platforms;android-35'
+
+      - name: Godot 4.7.2 e export templates
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.7.2
+          use-dotnet: false
+          include-templates: true
+
+      - name: Importar projeto
+        run: godot --headless --path . --editor --import --quit
+
+      - name: Rodar testes
+        run: godot --headless --path . --script res://tests/test_pong.gd
+
+      - name: Configurar exportador Android do Godot
+        shell: bash
+        run: |
+          settings_file=$(find "$HOME/.config/godot" -maxdepth 1 -type f -name 'editor_settings-4*.tres' -print -quit)
+          test -n "$settings_file"
+          printf '\nexport/android/android_sdk_path = "%s"\n' "$ANDROID_SDK_ROOT" >> "$settings_file"
+          printf 'export/android/java_sdk_path = "%s"\n' "$JAVA_HOME" >> "$settings_file"
+          keytool -genkeypair -keystore "$RUNNER_TEMP/pong-debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+
+      - name: Gerar APK de teste (ARM64)
+        env:
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ runner.temp }}/pong-debug.keystore
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
+        run: |
+          mkdir -p build
+          godot --headless --path . --export-debug Android build/pong-mobile-debug.apk
+          test -s build/pong-mobile-debug.apk
+
+      - name: Publicar APK como artefato
+        uses: actions/upload-artifact@v6
+        with:
+          name: pong-mobile-android-debug
+          path: build/pong-mobile-debug.apk
+          if-no-files-found: error
+
