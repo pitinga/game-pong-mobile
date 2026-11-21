@@ -80,6 +80,9 @@ var _cpu_target_y := 270.0
 var _cpu_reaction_timer := 0.0
 var _cpu_aim_bias := 0.0
 var _trail: Array[Vector2] = []
+# Um dedo pode possuir apenas uma raquete; o índice só muda num novo press.
+var _touch_owners: Dictionary = {}
+var _paddle_touch_ids: Array[int] = [-1, -1]
 
 var _menu: CenterContainer
 var _pause_menu: CenterContainer
@@ -121,6 +124,8 @@ func _physics_process(delta: float) -> void:
 	if state != GameState.PLAYING:
 		return
 
+	var player_y_before := player_y
+	var cpu_y_before := cpu_y
 	var axis := Input.get_axis("ui_up", "ui_down") if match_mode != MatchMode.TWO_PLAYERS else 0.0
 	if Input.is_key_pressed(KEY_W):
 		axis -= 1.0
@@ -147,9 +152,31 @@ func _physics_process(delta: float) -> void:
 	var ball_radius := _ball_radius()
 	var substeps := maxi(1, ceili(ball_velocity.length() * delta / ball_radius))
 	var step_delta := delta / float(substeps)
-	for _step in range(substeps):
-		ball_position += ball_velocity * step_delta
-		_check_ball_collisions()
+	for step_index in range(substeps):
+		var start := ball_position
+		var target := start + ball_velocity * step_delta
+		var start_progress := float(step_index) / float(substeps)
+		var end_progress := float(step_index + 1) / float(substeps)
+		var player_start := lerpf(player_y_before, player_y, start_progress)
+		var player_end := lerpf(player_y_before, player_y, end_progress)
+		var cpu_start := lerpf(cpu_y_before, cpu_y, start_progress)
+		var cpu_end := lerpf(cpu_y_before, cpu_y, end_progress)
+		var impact_time := -1.0
+		var hit_player := false
+		if ball_velocity.x < 0.0:
+			impact_time = _sweep_paddle_contact(start, target, PADDLE_MARGIN, player_start, player_end, true)
+			hit_player = true
+		elif ball_velocity.x > 0.0:
+			impact_time = _sweep_paddle_contact(start, target, size.x - PADDLE_MARGIN, cpu_start, cpu_end, false)
+		if impact_time >= 0.0:
+			ball_position = start.lerp(target, impact_time)
+			var paddle_y_at_contact := lerpf(player_start, player_end, impact_time) if hit_player else lerpf(cpu_start, cpu_end, impact_time)
+			_bounce_from_paddle(hit_player, paddle_y_at_contact)
+			# A nova velocidade percorre o restante do passo, sem perder tempo.
+			ball_position += ball_velocity * step_delta * (1.0 - impact_time)
+		else:
+			ball_position = target
+		_check_wall_collisions()
 		if ball_position.x < -ball_radius:
 			_score_point(false)
 			queue_redraw()
@@ -165,9 +192,8 @@ func _physics_process(delta: float) -> void:
 	queue_redraw()
 
 
-func _check_ball_collisions() -> void:
+func _check_wall_collisions() -> void:
 	var radius := _ball_radius()
-	var paddle_height := _paddle_height()
 	var top := FIELD_MARGIN + radius
 	var bottom := size.y - FIELD_MARGIN - radius
 	if ball_position.y <= top and ball_velocity.y < 0.0:
@@ -179,23 +205,58 @@ func _check_ball_collisions() -> void:
 		ball_velocity.y = -ball_velocity.y
 		_play_sound("wall")
 
-	var player_x := PADDLE_MARGIN
-	var cpu_x := size.x - PADDLE_MARGIN
-	if ball_velocity.x < 0.0 \
-		and ball_position.x - radius <= player_x + PADDLE_WIDTH * 0.5 \
-		and ball_position.x > player_x \
-		and absf(ball_position.y - player_y) <= paddle_height * 0.5 + radius:
-		ball_position.x = player_x + PADDLE_WIDTH * 0.5 + radius
-		_bounce_from_paddle(true)
-	elif ball_velocity.x > 0.0 \
-		and ball_position.x + radius >= cpu_x - PADDLE_WIDTH * 0.5 \
-		and ball_position.x < cpu_x \
-		and absf(ball_position.y - cpu_y) <= paddle_height * 0.5 + radius:
-		ball_position.x = cpu_x - PADDLE_WIDTH * 0.5 - radius
-		_bounce_from_paddle(false)
+
+
+func _sweep_paddle_contact(start: Vector2, finish: Vector2, paddle_x: float, start_y: float, finish_y: float, is_player: bool) -> float:
+	## Primeiro instante de contato entre um círculo em movimento e o retângulo
+	## da raquete. Resolver no referencial da raquete inclui seu deslocamento.
+	## A borda traseira não pode resgatar uma bola que já ultrapassou a face.
+	var front_sign := 1.0 if is_player else -1.0
+	var half_width := PADDLE_WIDTH * 0.5
+	var half_height := _paddle_height() * 0.5
+	var radius := _ball_radius()
+	var p := Vector2(start.x - paddle_x, start.y - start_y)
+	var d := Vector2(finish.x - start.x, finish.y - start.y - (finish_y - start_y))
+	if front_sign * p.x < half_width - 0.0001 or front_sign * d.x >= 0.0:
+		return -1.0
+	var nearest := 2.0
+	# Face frontal reta.
+	if absf(d.x) > 0.000001:
+		var t := (front_sign * (half_width + radius) - p.x) / d.x
+		if t >= 0.0 and t <= 1.0 and absf(p.y + d.y * t) <= half_height:
+			nearest = t
+	# Faces superior/inferior, apenas na metade da frente da raquete.
+	if absf(d.y) > 0.000001:
+		for side in [-1.0, 1.0]:
+			if d.y * side >= 0.0:
+				continue
+			var t: float = (side * (half_height + radius) - p.y) / d.y
+			var x: float = p.x + d.x * t
+			if t >= 0.0 and t <= 1.0 and front_sign * x >= 0.0 and front_sign * x <= half_width:
+				nearest = minf(nearest, t)
+	# Cantos arredondados pela geometria real do círculo: distância euclidiana.
+	var speed_squared := d.length_squared()
+	if speed_squared > 0.00000001:
+		for side in [-1.0, 1.0]:
+			var corner: Vector2 = Vector2(front_sign * half_width, side * half_height)
+			var offset := p - corner
+			var b := 2.0 * offset.dot(d)
+			var c := offset.length_squared() - radius * radius
+			var discriminant := b * b - 4.0 * speed_squared * c
+			if discriminant < 0.0 or b >= 0.0:
+				continue
+			var t := maxf(0.0, (-b - sqrt(discriminant)) / (2.0 * speed_squared))
+			var contact := p + d * t
+			if t <= 1.0 and front_sign * contact.x >= half_width - 0.0001 and side * contact.y >= half_height - 0.0001:
+				nearest = minf(nearest, t)
+	return nearest if nearest <= 1.0 else -1.0
 
 
 func _input(event: InputEvent) -> void:
+	# Release/cancel deve chegar mesmo quando a GUI consumiu o evento.
+	if event is InputEventScreenTouch and (not event.pressed or event.canceled):
+		_release_touch(event.index)
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE or event.keycode == KEY_P:
 			if state == GameState.PLAYING or state == GameState.PAUSED:
@@ -215,16 +276,30 @@ func _unhandled_input(event: InputEvent) -> void:
 	if state != GameState.PLAYING:
 		return
 
-	var move_paddle := false
 	if event is InputEventScreenTouch:
-		move_paddle = event.pressed
+		if not event.pressed or event.canceled or _touch_owners.has(event.index):
+			return
+		if _pause_button.visible and _pause_button.get_global_rect().has_point(event.position):
+			return
+		var position: Vector2 = make_input_local(event).position
+		var owner := 1 if match_mode == MatchMode.TWO_PLAYERS and position.x >= size.x * 0.5 else 0
+		if _paddle_touch_ids[owner] != -1:
+			return
+		_touch_owners[event.index] = owner
+		_paddle_touch_ids[owner] = event.index
+		_set_paddle_owned_y(owner, position.y)
+		get_viewport().set_input_as_handled()
+		return
 	elif event is InputEventScreenDrag:
-		move_paddle = true
-	elif event is InputEventMouseButton:
-		move_paddle = event.button_index == MOUSE_BUTTON_LEFT and event.pressed
-	elif event is InputEventMouseMotion:
-		move_paddle = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-	if not move_paddle:
+		if not _touch_owners.has(event.index):
+			return
+		var owner: int = _touch_owners[event.index]
+		_set_paddle_owned_y(owner, make_input_local(event).position.y)
+		get_viewport().set_input_as_handled()
+		return
+	var is_mouse_move: bool = event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed
+	is_mouse_move = is_mouse_move or (event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT))
+	if not is_mouse_move:
 		return
 
 	# A GUI recebe primeiro; o retangulo de pausa protege tambem eventos
@@ -236,10 +311,33 @@ func _unhandled_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 
+func _set_paddle_owned_y(owner: int, target_y: float) -> void:
+	if owner == 1:
+		_set_cpu_y(target_y)
+	else:
+		_set_player_y(target_y)
+
+
+func _release_touch(index: int) -> void:
+	if not _touch_owners.has(index):
+		return
+	var owner: int = _touch_owners[index]
+	_touch_owners.erase(index)
+	_paddle_touch_ids[owner] = -1
+
+
+func _clear_touch_captures() -> void:
+	_touch_owners.clear()
+	_paddle_touch_ids[0] = -1
+	_paddle_touch_ids[1] = -1
+
+
 func _notification(what: int) -> void:
 	if what in [NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT] and state == GameState.PLAYING:
 		state = GameState.PAUSED
+		_clear_touch_captures()
 		_show_interface()
+		queue_redraw()
 
 
 func _on_resized() -> void:
@@ -308,6 +406,7 @@ func _draw_centered(message: String, baseline: Vector2, font_size: int, color: C
 
 
 func _start_match() -> void:
+	_clear_touch_captures()
 	_interstitial_attempted_this_match = false
 	_interstitial_show_pending = false
 	player_score = 0
@@ -382,6 +481,8 @@ func _reset_positions() -> void:
 
 
 func _reset_round(direction: float) -> void:
+	# Requer novo press após um ponto; dedo parado não teletransporta raquete.
+	_clear_touch_captures()
 	_reset_positions()
 	_serve_direction = direction
 	_serve_countdown = 0.9
@@ -403,8 +504,8 @@ func _accelerate_ball(delta: float) -> void:
 		ball_velocity *= minf(speed + BALL_ACCELERATION * delta, MAX_BALL_SPEED) / speed
 
 
-func _bounce_from_paddle(is_player: bool) -> void:
-	var paddle_center := player_y if is_player else cpu_y
+func _bounce_from_paddle(is_player: bool, contact_paddle_y: float = -1.0) -> void:
+	var paddle_center := contact_paddle_y if contact_paddle_y >= 0.0 else player_y if is_player else cpu_y
 	var offset := clampf((ball_position.y - paddle_center) / (_paddle_height() * 0.5), -1.0, 1.0)
 	var angle := offset * 0.98
 	var direction := 1.0 if is_player else -1.0
@@ -550,11 +651,13 @@ func _toggle_pause() -> void:
 		state = GameState.PAUSED
 	elif state == GameState.PAUSED:
 		state = GameState.PLAYING
+	_clear_touch_captures()
 	_show_interface()
 	queue_redraw()
 
 
 func _return_to_menu() -> void:
+	_clear_touch_captures()
 	state = GameState.MENU
 	player_score = 0
 	cpu_score = 0
