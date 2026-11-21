@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1">
+      <stop offset="0" stop-color="#081526"/>
+      <stop offset=".55" stop-color="#18324d"/>
+      <stop offset="1" stop-color="#081526"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#3b5266" stroke-opacity=".4"/>
+    </pattern>
+  </defs>
+  <rect width="1024" height="500" fill="url(#bg)"/>
+  <rect width="1024" height="500" fill="url(#grid)"/>
+  <path d="M512 16V484" stroke="#a18d56" stroke-width="5" stroke-dasharray="19 20" opacity=".65"/>
+  <rect x="120" y="161" width="20" height="181" rx="9" fill="#f8cc59"/>
+  <rect x="884" y="107" width="20" height="181" rx="9" fill="#f8cc59"/>
+  <path d="M787 311L711 294L652 267" fill="none" stroke="#fff4cf" stroke-width="10" stroke-linecap="round" opacity=".18"/>
+  <circle cx="636" cy="259" r="16" fill="#fff4cf"/>
+  <rect x="238" y="92" width="550" height="320" rx="30" fill="#081526" fill-opacity=".91" stroke="#a18d56" stroke-width="2"/>
+  <text x="513" y="234" font-family="DejaVu Sans,sans-serif" font-size="112" font-weight="900" text-anchor="middle" fill="#f5faff" letter-spacing="8">PONG</text>
+  <text x="513" y="321" font-family="DejaVu Sans,sans-serif" font-size="78" font-weight="900" text-anchor="middle" fill="#f8cc59" letter-spacing="15">PRO</text>
+  <text x="513" y="362" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="600" text-anchor="middle" fill="#b9cada" letter-spacing="3">SEM ANÚNCIOS  •  MODOS EXTRAS</text>
+  <rect y="484" width="1024" height="16" fill="#f8cc59"/>
+</svg>

@@ -1,7 +1,13 @@
 extends Control
 ## Pong Mobile: jogo 2D em uma única cena, sem dependências externas.
 
-enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY }
+enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY, SETTINGS, STATS }
+enum MatchMode { CLASSIC, SURVIVAL, TWO_PLAYERS }
+
+const AdPolicy = preload("res://scripts/ad_policy.gd")
+const PRO_STORE_URL := "https://play.google.com/store/apps/details?id=com.pitinga.pongmobile.pro"
+const SETTINGS_FILE := "user://pong_pro_settings.cfg"
+const STATS_FILE := "user://pong_pro_stats.cfg"
 
 const BG := Color("#081526")
 const GRID := Color("#183047")
@@ -27,6 +33,26 @@ const CPU_REACTION := [0.48, 0.30, 0.15]
 const CPU_ERROR := [115.0, 80.0, 18.0]
 const CPU_LOOKAHEAD := [0.10, 0.30, 0.85]
 const DIFFICULTIES := ["FÁCIL", "MÉDIO", "DIFÍCIL"]
+const THEMES := [
+	{"name": "NEON", "player": Color("#31e4ed"), "cpu": Color("#ff658d"), "ball": Color("#f5faff")},
+	{"name": "CLÁSSICO", "player": Color.WHITE, "cpu": Color.WHITE, "ball": Color.WHITE},
+	{"name": "VERDE", "player": Color("#8fea5b"), "cpu": Color("#8fea5b"), "ball": Color("#d9ff68")},
+]
+
+var is_pro := OS.has_feature("pong_pro")
+var match_mode: MatchMode = MatchMode.CLASSIC
+var point_limit := WIN_SCORE
+var ball_scale := 1.0
+var paddle_scale := 1.0
+var theme_index := 0
+var survival_hits := 0
+var _stats := {
+	"played": 0, "wins": 0, "losses": 0, "streak": 0,
+	"best_streak": 0, "best_survival": 0, "two_player_matches": 0,
+	"standard_wins": 0, "standard_losses": 0,
+	"custom_wins": 0, "custom_losses": 0,
+}
+var _ad_policy = AdPolicy.new()
 
 var state: GameState = GameState.MENU
 var difficulty := 1
@@ -49,14 +75,28 @@ var _menu: CenterContainer
 var _pause_menu: CenterContainer
 var _finish_menu: CenterContainer
 var _privacy_menu: CenterContainer
+var _settings_menu: CenterContainer
+var _stats_menu: CenterContainer
 var _finish_title: Label
 var _finish_score: Label
 var _pause_button: Button
+var _ball_value_label: Label
+var _paddle_value_label: Label
+var _ball_slider: HSlider
+var _paddle_slider: HSlider
+var _mode_selector: OptionButton
+var _points_selector: OptionButton
+var _theme_selector: OptionButton
+var _stats_text: Label
+var _pro_button: Button
 var _difficulty_buttons: Array[Button] = []
 var _sound_players := {}
 
 
 func _ready() -> void:
+	if is_pro:
+		_load_pro_settings()
+		_load_pro_stats()
 	_build_sounds()
 	_build_interface()
 	_reset_positions()
@@ -69,15 +109,20 @@ func _physics_process(delta: float) -> void:
 	if state != GameState.PLAYING:
 		return
 
-	var axis := Input.get_axis("ui_up", "ui_down")
+	var axis := Input.get_axis("ui_up", "ui_down") if match_mode != MatchMode.TWO_PLAYERS else 0.0
 	if Input.is_key_pressed(KEY_W):
 		axis -= 1.0
 	if Input.is_key_pressed(KEY_S):
 		axis += 1.0
 	if not is_zero_approx(axis):
 		_set_player_y(player_y + clampf(axis, -1.0, 1.0) * PLAYER_SPEED * delta)
+	if match_mode == MatchMode.TWO_PLAYERS:
+		var second_axis := Input.get_axis("ui_up", "ui_down")
+		if not is_zero_approx(second_axis):
+			_set_cpu_y(cpu_y + second_axis * PLAYER_SPEED * delta)
 
-	_update_cpu(delta)
+	if match_mode != MatchMode.TWO_PLAYERS:
+		_update_cpu(delta)
 	if _serve_countdown > 0.0:
 		_serve_countdown -= delta
 		if _serve_countdown <= 0.0:
@@ -87,16 +132,17 @@ func _physics_process(delta: float) -> void:
 
 	_accelerate_ball(delta)
 	# Passos curtos evitam atravessar as raquetes quando a bola estiver rápida.
-	var substeps := maxi(1, ceili(ball_velocity.length() * delta / BALL_RADIUS))
+	var ball_radius := _ball_radius()
+	var substeps := maxi(1, ceili(ball_velocity.length() * delta / ball_radius))
 	var step_delta := delta / float(substeps)
 	for _step in range(substeps):
 		ball_position += ball_velocity * step_delta
 		_check_ball_collisions()
-		if ball_position.x < -BALL_RADIUS:
+		if ball_position.x < -ball_radius:
 			_score_point(false)
 			queue_redraw()
 			return
-		elif ball_position.x > size.x + BALL_RADIUS:
+		elif ball_position.x > size.x + ball_radius:
 			_score_point(true)
 			queue_redraw()
 			return
@@ -108,8 +154,10 @@ func _physics_process(delta: float) -> void:
 
 
 func _check_ball_collisions() -> void:
-	var top := FIELD_MARGIN + BALL_RADIUS
-	var bottom := size.y - FIELD_MARGIN - BALL_RADIUS
+	var radius := _ball_radius()
+	var paddle_height := _paddle_height()
+	var top := FIELD_MARGIN + radius
+	var bottom := size.y - FIELD_MARGIN - radius
 	if ball_position.y <= top and ball_velocity.y < 0.0:
 		ball_position.y = top
 		ball_velocity.y = -ball_velocity.y
@@ -122,16 +170,16 @@ func _check_ball_collisions() -> void:
 	var player_x := PADDLE_MARGIN
 	var cpu_x := size.x - PADDLE_MARGIN
 	if ball_velocity.x < 0.0 \
-		and ball_position.x - BALL_RADIUS <= player_x + PADDLE_WIDTH * 0.5 \
+		and ball_position.x - radius <= player_x + PADDLE_WIDTH * 0.5 \
 		and ball_position.x > player_x \
-		and absf(ball_position.y - player_y) <= PADDLE_HEIGHT * 0.5 + BALL_RADIUS:
-		ball_position.x = player_x + PADDLE_WIDTH * 0.5 + BALL_RADIUS
+		and absf(ball_position.y - player_y) <= paddle_height * 0.5 + radius:
+		ball_position.x = player_x + PADDLE_WIDTH * 0.5 + radius
 		_bounce_from_paddle(true)
 	elif ball_velocity.x > 0.0 \
-		and ball_position.x + BALL_RADIUS >= cpu_x - PADDLE_WIDTH * 0.5 \
+		and ball_position.x + radius >= cpu_x - PADDLE_WIDTH * 0.5 \
 		and ball_position.x < cpu_x \
-		and absf(ball_position.y - cpu_y) <= PADDLE_HEIGHT * 0.5 + BALL_RADIUS:
-		ball_position.x = cpu_x - PADDLE_WIDTH * 0.5 - BALL_RADIUS
+		and absf(ball_position.y - cpu_y) <= paddle_height * 0.5 + radius:
+		ball_position.x = cpu_x - PADDLE_WIDTH * 0.5 - radius
 		_bounce_from_paddle(false)
 
 
@@ -141,7 +189,7 @@ func _input(event: InputEvent) -> void:
 			if state == GameState.PLAYING or state == GameState.PAUSED:
 				_toggle_pause()
 				get_viewport().set_input_as_handled()
-			elif state == GameState.PRIVACY:
+			elif state in [GameState.PRIVACY, GameState.SETTINGS, GameState.STATS]:
 				_return_to_menu()
 			return
 		if event.keycode == KEY_ENTER and state == GameState.MENU:
@@ -152,13 +200,13 @@ func _input(event: InputEvent) -> void:
 		return
 
 	if event is InputEventScreenTouch and event.pressed:
-		_set_player_y(event.position.y)
+		_set_touch_paddle(event.position)
 	elif event is InputEventScreenDrag:
-		_set_player_y(event.position.y)
+		_set_touch_paddle(event.position)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		_set_player_y(event.position.y)
+		_set_touch_paddle(event.position)
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		_set_player_y(event.position.y)
+		_set_touch_paddle(event.position)
 
 
 func _notification(what: int) -> void:
@@ -184,32 +232,34 @@ func _draw() -> void:
 	for y in range(28, int(h) - 20, 30):
 		draw_rect(Rect2(w * 0.5 - 2.0, y, 4.0, 17.0), Color("#31506a"))
 
-	_draw_paddle(Vector2(PADDLE_MARGIN, player_y), CYAN)
-	_draw_paddle(Vector2(w - PADDLE_MARGIN, cpu_y), PINK)
+	_draw_paddle(Vector2(PADDLE_MARGIN, player_y), THEMES[theme_index]["player"])
+	_draw_paddle(Vector2(w - PADDLE_MARGIN, cpu_y), THEMES[theme_index]["cpu"])
+	var radius := _ball_radius()
 	for i in range(_trail.size() - 1, -1, -1):
 		var opacity := (1.0 - float(i) / 12.0) * 0.22
-		draw_circle(_trail[i], maxf(2.0, BALL_RADIUS - float(i) * 0.5), Color(1, 1, 1, opacity))
-	draw_circle(ball_position, BALL_RADIUS + 6.0, Color(1, 1, 1, 0.12))
-	draw_circle(ball_position, BALL_RADIUS, WHITE)
+		draw_circle(_trail[i], maxf(2.0, radius - float(i) * 0.5), Color(1, 1, 1, opacity))
+	draw_circle(ball_position, radius + 6.0, Color(1, 1, 1, 0.12))
+	draw_circle(ball_position, radius, THEMES[theme_index]["ball"])
 
-	_draw_centered(str(player_score).pad_zeros(2), Vector2(w * 0.42, 79), 54, CYAN)
+	_draw_centered(str(survival_hits).pad_zeros(2) if match_mode == MatchMode.SURVIVAL else str(player_score).pad_zeros(2), Vector2(w * 0.42, 79), 54, CYAN)
 	_draw_centered(str(cpu_score).pad_zeros(2), Vector2(w * 0.58, 79), 54, PINK)
-	_draw_centered("VOCÊ", Vector2(w * 0.42, 106), 13, MUTED)
-	_draw_centered("CPU", Vector2(w * 0.58, 106), 13, MUTED)
+	_draw_centered("REBATIDAS" if match_mode == MatchMode.SURVIVAL else "P1" if match_mode == MatchMode.TWO_PLAYERS else "VOCÊ", Vector2(w * 0.42, 106), 13, MUTED)
+	_draw_centered("P2" if match_mode == MatchMode.TWO_PLAYERS else "CPU", Vector2(w * 0.58, 106), 13, MUTED)
 	if state == GameState.PLAYING:
 		var speed_ratio := maxf(1.0, ball_velocity.length() / BASE_BALL_SPEED)
-		_draw_centered("NÍVEL %s   •   BOLA %.1fx" % [DIFFICULTIES[difficulty], speed_ratio], Vector2(w * 0.5, 143), 14, MUTED)
-		_draw_centered("DESLIZE O DEDO PARA MOVER A RAQUETE", Vector2(w * 0.5, h - 31), 14, MUTED)
+		_draw_centered("2 JOGADORES   •   BOLA %.1fx" % speed_ratio if match_mode == MatchMode.TWO_PLAYERS else "NÍVEL %s   •   BOLA %.1fx" % [DIFFICULTIES[difficulty], speed_ratio], Vector2(w * 0.5, 143), 14, MUTED)
+		_draw_centered("CADA JOGADOR CONTROLA SUA METADE" if match_mode == MatchMode.TWO_PLAYERS else "DESLIZE O DEDO PARA MOVER A RAQUETE", Vector2(w * 0.5, h - 31), 14, MUTED)
 		if _serve_countdown > 0.0:
 			_draw_centered("PREPARE-SE", Vector2(w * 0.5, h * 0.39), 26, WHITE)
 
 
 func _draw_paddle(center: Vector2, color: Color) -> void:
-	var rectangle := Rect2(center - Vector2(PADDLE_WIDTH, PADDLE_HEIGHT) * 0.5, Vector2(PADDLE_WIDTH, PADDLE_HEIGHT))
+	var paddle_height := _paddle_height()
+	var rectangle := Rect2(center - Vector2(PADDLE_WIDTH, paddle_height) * 0.5, Vector2(PADDLE_WIDTH, paddle_height))
 	draw_rect(rectangle.grow(8.0), Color(color.r, color.g, color.b, 0.09))
 	draw_rect(rectangle.grow(3.0), Color(color.r, color.g, color.b, 0.21))
 	draw_rect(rectangle, color)
-	draw_rect(Rect2(rectangle.position + Vector2(3, 7), Vector2(3, PADDLE_HEIGHT - 14)), Color(1, 1, 1, 0.24))
+	draw_rect(Rect2(rectangle.position + Vector2(3, 7), Vector2(3, paddle_height - 14)), Color(1, 1, 1, 0.24))
 
 
 func _draw_centered(message: String, baseline: Vector2, font_size: int, color: Color) -> void:
@@ -222,6 +272,7 @@ func _start_match() -> void:
 	player_score = 0
 	cpu_score = 0
 	player_won = false
+	survival_hits = 0
 	_reset_positions()
 	state = GameState.PLAYING
 	_reset_round(1.0 if randf() > 0.5 else -1.0)
@@ -238,7 +289,26 @@ func _select_difficulty(value: int) -> void:
 
 
 func _set_player_y(target: float) -> void:
-	player_y = clampf(target, FIELD_MARGIN + PADDLE_HEIGHT * 0.5, size.y - FIELD_MARGIN - PADDLE_HEIGHT * 0.5)
+	player_y = clampf(target, FIELD_MARGIN + _paddle_height() * 0.5, size.y - FIELD_MARGIN - _paddle_height() * 0.5)
+
+
+func _set_cpu_y(target: float) -> void:
+	cpu_y = clampf(target, FIELD_MARGIN + _paddle_height() * 0.5, size.y - FIELD_MARGIN - _paddle_height() * 0.5)
+
+
+func _set_touch_paddle(position: Vector2) -> void:
+	if match_mode == MatchMode.TWO_PLAYERS and position.x >= size.x * 0.5:
+		_set_cpu_y(position.y)
+	else:
+		_set_player_y(position.y)
+
+
+func _ball_radius() -> float:
+	return BALL_RADIUS * ball_scale
+
+
+func _paddle_height() -> float:
+	return PADDLE_HEIGHT * paddle_scale
 
 
 func _reset_positions() -> void:
@@ -275,11 +345,13 @@ func _accelerate_ball(delta: float) -> void:
 
 func _bounce_from_paddle(is_player: bool) -> void:
 	var paddle_center := player_y if is_player else cpu_y
-	var offset := clampf((ball_position.y - paddle_center) / (PADDLE_HEIGHT * 0.5), -1.0, 1.0)
+	var offset := clampf((ball_position.y - paddle_center) / (_paddle_height() * 0.5), -1.0, 1.0)
 	var angle := offset * 0.98
 	var direction := 1.0 if is_player else -1.0
 	var speed := minf(ball_velocity.length() + PADDLE_SPEED_BONUS, MAX_BALL_SPEED)
 	ball_velocity = Vector2(direction * cos(angle), sin(angle)) * speed
+	if is_player and match_mode == MatchMode.SURVIVAL:
+		survival_hits += 1
 	if is_player:
 		# O erro é sorteado uma vez por devolução, sem teletransporte da mira.
 		_cpu_aim_bias = randf_range(-CPU_ERROR[difficulty], CPU_ERROR[difficulty])
@@ -297,7 +369,7 @@ func _update_cpu(delta: float) -> void:
 			var destination_x := size.x - PADDLE_MARGIN
 			var flight_time := maxf(0.0, (destination_x - ball_position.x) / ball_velocity.x)
 			flight_time = minf(flight_time, CPU_LOOKAHEAD[difficulty])
-			var top := FIELD_MARGIN + BALL_RADIUS
+			var top := FIELD_MARGIN + _ball_radius()
 			var span := size.y - 2.0 * top
 			var projected_y := ball_position.y + flight_time * ball_velocity.y
 			var mirrored := fposmod(projected_y - top, span * 2.0)
@@ -306,23 +378,49 @@ func _update_cpu(delta: float) -> void:
 		else:
 			_cpu_target_y = size.y * 0.5 + randf_range(-30.0, 30.0)
 	var step: float = CPU_SPEEDS[difficulty] * delta
-	cpu_y = move_toward(cpu_y, clampf(_cpu_target_y, FIELD_MARGIN + PADDLE_HEIGHT * 0.5, size.y - FIELD_MARGIN - PADDLE_HEIGHT * 0.5), step)
+	cpu_y = move_toward(cpu_y, clampf(_cpu_target_y, FIELD_MARGIN + _paddle_height() * 0.5, size.y - FIELD_MARGIN - _paddle_height() * 0.5), step)
 
 
 func _score_point(for_player: bool) -> void:
+	if match_mode == MatchMode.SURVIVAL:
+		_play_sound("point")
+		if for_player:
+			_reset_round(-1.0)
+		else:
+			cpu_score = 1
+			_complete_match(false)
+		return
 	if for_player:
 		player_score += 1
 	else:
 		cpu_score += 1
 	_play_sound("point")
-	if player_score >= WIN_SCORE or cpu_score >= WIN_SCORE:
-		player_won = player_score >= WIN_SCORE
-		state = GameState.FINISHED
-		_finish_title.text = "VOCÊ VENCEU!" if player_won else "CPU VENCEU!"
-		_finish_score.text = "%02d   :   %02d" % [player_score, cpu_score]
-		_show_interface()
+	if player_score >= point_limit or cpu_score >= point_limit:
+		_complete_match(player_score >= point_limit)
 	else:
 		_reset_round(-1.0 if for_player else 1.0)
+
+
+func _complete_match(won: bool) -> void:
+	player_won = won
+	state = GameState.FINISHED
+	if match_mode == MatchMode.SURVIVAL:
+		_finish_title.text = "FIM DA SOBREVIVÊNCIA"
+		_finish_score.text = "%d REBATIDAS" % survival_hits
+	elif match_mode == MatchMode.TWO_PLAYERS:
+		_finish_title.text = "JOGADOR 1 VENCEU!" if won else "JOGADOR 2 VENCEU!"
+		_finish_score.text = "%02d   :   %02d" % [player_score, cpu_score]
+	else:
+		_finish_title.text = "VOCÊ VENCEU!" if won else "CPU VENCEU!"
+		_finish_score.text = "%02d   :   %02d" % [player_score, cpu_score]
+	if is_pro:
+		_record_pro_stats(won)
+	else:
+		_ad_policy.note_finished_match()
+		# O adaptador AdMob será conectado quando a conta e os IDs estiverem disponíveis.
+		# Nenhum anúncio é solicitado no momento, evitando publicidade de teste em produção.
+	_show_interface()
+	queue_redraw()
 
 
 func _toggle_pause() -> void:
@@ -349,20 +447,186 @@ func _open_privacy() -> void:
 	queue_redraw()
 
 
+func _open_settings() -> void:
+	if not is_pro:
+		return
+	state = GameState.SETTINGS
+	_show_interface()
+
+
+func _open_stats() -> void:
+	if not is_pro:
+		return
+	_refresh_stats()
+	state = GameState.STATS
+	_show_interface()
+
+
+func _open_pro_store() -> void:
+	if OS.has_feature("pong_pro_store_live") and OS.get_name() == "Android":
+		OS.shell_open(PRO_STORE_URL)
+	else:
+		_pro_button.text = "PONG PRO — EM BREVE NA PLAY STORE"
+
+
 func _show_interface() -> void:
 	_menu.visible = state == GameState.MENU
 	_pause_menu.visible = state == GameState.PAUSED
 	_finish_menu.visible = state == GameState.FINISHED
 	_privacy_menu.visible = state == GameState.PRIVACY
+	_settings_menu.visible = state == GameState.SETTINGS
+	_stats_menu.visible = state == GameState.STATS
 	_pause_button.visible = state == GameState.PLAYING
+
+
+func _load_pro_settings() -> void:
+	var config := ConfigFile.new()
+	if config.load(SETTINGS_FILE) != OK:
+		return
+	ball_scale = clampf(float(config.get_value("visual", "ball_scale", 1.0)), 0.7, 1.5)
+	paddle_scale = clampf(float(config.get_value("visual", "paddle_scale", 1.0)), 0.7, 1.5)
+	theme_index = clampi(int(config.get_value("visual", "theme", 0)), 0, THEMES.size() - 1)
+	point_limit = _points_from_index(int(config.get_value("rules", "points", 0)))
+	_set_mode(int(config.get_value("rules", "mode", 0)), false)
+
+
+func _save_pro_settings() -> void:
+	if not is_pro:
+		return
+	var config := ConfigFile.new()
+	config.set_value("visual", "ball_scale", ball_scale)
+	config.set_value("visual", "paddle_scale", paddle_scale)
+	config.set_value("visual", "theme", theme_index)
+	config.set_value("rules", "mode", int(match_mode))
+	config.set_value("rules", "points", _points_index())
+	if config.save(SETTINGS_FILE) != OK:
+		push_warning("Não foi possível guardar a personalização do Pong Pro.")
+
+
+func _load_pro_stats() -> void:
+	var config := ConfigFile.new()
+	if config.load(STATS_FILE) != OK:
+		return
+	for key in _stats.keys():
+		_stats[key] = maxi(0, int(config.get_value("stats", key, 0)))
+
+
+func _save_pro_stats() -> void:
+	var config := ConfigFile.new()
+	for key in _stats.keys():
+		config.set_value("stats", key, _stats[key])
+	if config.save(STATS_FILE) != OK:
+		push_warning("Não foi possível guardar as estatísticas do Pong Pro.")
+
+
+func _record_pro_stats(won: bool) -> void:
+	_stats["played"] += 1
+	match match_mode:
+		MatchMode.SURVIVAL:
+			_stats["best_survival"] = maxi(int(_stats["best_survival"]), survival_hits)
+		MatchMode.TWO_PLAYERS:
+			_stats["two_player_matches"] += 1
+		MatchMode.CLASSIC:
+			var stat_prefix := "standard" if _is_standard_rules() else "custom"
+			if won:
+				_stats["wins"] += 1
+				_stats[stat_prefix + "_wins"] += 1
+				_stats["streak"] += 1
+				_stats["best_streak"] = maxi(int(_stats["best_streak"]), int(_stats["streak"]))
+			else:
+				_stats["losses"] += 1
+				_stats[stat_prefix + "_losses"] += 1
+				_stats["streak"] = 0
+	_save_pro_stats()
+
+
+func _is_standard_rules() -> bool:
+	return is_equal_approx(ball_scale, 1.0) and is_equal_approx(paddle_scale, 1.0) and point_limit == WIN_SCORE
+
+
+func _refresh_stats() -> void:
+	_stats_text.text = "PARTIDAS TOTAIS: %d\nCLÁSSICO PADRÃO: %dV / %dD\nCLÁSSICO PERSONALIZADO: %dV / %dD\nSEQUÊNCIA ATUAL: %d\nMELHOR SEQUÊNCIA: %d\nRECORDE SOBREVIVÊNCIA: %d\nPARTIDAS COM 2 JOGADORES: %d" % [
+		_stats["played"], _stats["standard_wins"], _stats["standard_losses"],
+		_stats["custom_wins"], _stats["custom_losses"],
+		_stats["streak"], _stats["best_streak"],
+		_stats["best_survival"], _stats["two_player_matches"]
+	]
+
+
+func _set_ball_size(value: float) -> void:
+	ball_scale = clampf(roundf(value / 10.0) / 10.0, 0.7, 1.5)
+	if _ball_value_label != null:
+		_ball_value_label.text = "TAMANHO DA BOLA: %d%%" % roundi(ball_scale * 100.0)
+	_save_pro_settings()
+	queue_redraw()
+
+
+func _set_paddle_size(value: float) -> void:
+	paddle_scale = clampf(roundf(value / 10.0) / 10.0, 0.7, 1.5)
+	if _paddle_value_label != null:
+		_paddle_value_label.text = "ALTURA DAS RAQUETES: %d%%" % roundi(paddle_scale * 100.0)
+	_save_pro_settings()
+	queue_redraw()
+
+
+func _select_theme(value: int) -> void:
+	theme_index = clampi(value, 0, THEMES.size() - 1)
+	_save_pro_settings()
+	queue_redraw()
+
+
+func _set_mode(value: int, persist: bool = true) -> void:
+	match value:
+		1: match_mode = MatchMode.SURVIVAL
+		2: match_mode = MatchMode.TWO_PLAYERS
+		_: match_mode = MatchMode.CLASSIC
+	if persist:
+		_save_pro_settings()
+	queue_redraw()
+
+
+func _points_from_index(index: int) -> int:
+	match index:
+		1: return 11
+		2: return 21
+		_: return 7
+
+
+func _points_index() -> int:
+	return 0 if point_limit == 7 else 1 if point_limit == 11 else 2
+
+
+func _set_points(index: int) -> void:
+	point_limit = _points_from_index(index)
+	_save_pro_settings()
+
+
+func _restore_pro_defaults() -> void:
+	if not is_pro:
+		return
+	ball_scale = 1.0
+	paddle_scale = 1.0
+	theme_index = 0
+	match_mode = MatchMode.CLASSIC
+	point_limit = WIN_SCORE
+	_ball_slider.set_value_no_signal(100)
+	_paddle_slider.set_value_no_signal(100)
+	_ball_value_label.text = "TAMANHO DA BOLA: 100%"
+	_paddle_value_label.text = "ALTURA DAS RAQUETES: 100%"
+	_theme_selector.select(0)
+	_mode_selector.select(0)
+	_points_selector.select(0)
+	_save_pro_settings()
+	queue_redraw()
 
 
 func _build_interface() -> void:
 	_menu = _new_overlay()
 	var menu_content := _overlay_content(_menu)
-	_add_label(menu_content, "PONG", 72, WHITE)
-	_add_label(menu_content, "ARCADE  /  MOBILE", 17, CYAN)
-	_add_space(menu_content, 12)
+	menu_content.add_theme_constant_override("separation", 8)
+	_add_label(menu_content, "PONG PRO" if is_pro else "PONG", 60, WHITE)
+	_add_label(menu_content, "SEM ANÚNCIOS  /  MAIS MODOS" if is_pro else "ARCADE  /  MOBILE", 15, CYAN)
+	_add_space(menu_content, 6)
 	_add_label(menu_content, "ESCOLHA A DIFICULDADE", 15, MUTED)
 	var levels := HBoxContainer.new()
 	levels.add_theme_constant_override("separation", 12)
@@ -373,14 +637,37 @@ func _build_interface() -> void:
 		levels.add_child(button)
 		button.pressed.connect(_select_difficulty.bind(i))
 		_difficulty_buttons.append(button)
-	_add_space(menu_content, 10)
+	_add_space(menu_content, 5)
 	var start_button := _new_button("JOGAR  ▶", CYAN, true)
-	start_button.custom_minimum_size = Vector2(0, 58)
+	start_button.custom_minimum_size = Vector2(0, 52)
 	menu_content.add_child(start_button)
 	start_button.pressed.connect(_start_match)
-	_add_label(menu_content, "1 JOGADOR  •  PRIMEIRO A 7 PONTOS", 14, MUTED)
+	_add_label(menu_content, "MODOS EXTRAS E AJUSTES PERSONALIZADOS" if is_pro else "1 JOGADOR  •  PRIMEIRO A 7 PONTOS", 13, MUTED)
+	if is_pro:
+		var pro_row := HBoxContainer.new()
+		pro_row.add_theme_constant_override("separation", 10)
+		menu_content.add_child(pro_row)
+		var config_button := _new_button("PERSONALIZAR / MODOS", GRID, false)
+		config_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		config_button.custom_minimum_size.y = 40
+		config_button.add_theme_font_size_override("font_size", 14)
+		pro_row.add_child(config_button)
+		config_button.pressed.connect(_open_settings)
+		var stats_button := _new_button("ESTATÍSTICAS", GRID, false)
+		stats_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		stats_button.custom_minimum_size.y = 40
+		stats_button.add_theme_font_size_override("font_size", 14)
+		pro_row.add_child(stats_button)
+		stats_button.pressed.connect(_open_stats)
+	else:
+		_pro_button = _new_button("★  CONHEÇA O PONG PRO  ★", GRID, false)
+		_pro_button.custom_minimum_size.y = 40
+		_pro_button.add_theme_font_size_override("font_size", 15)
+		menu_content.add_child(_pro_button)
+		_pro_button.pressed.connect(_open_pro_store)
 	var privacy_button := _new_button("PRIVACIDADE", GRID, false)
-	privacy_button.custom_minimum_size.y = 42
+	privacy_button.custom_minimum_size.y = 36
+	privacy_button.add_theme_font_size_override("font_size", 14)
 	menu_content.add_child(privacy_button)
 	privacy_button.pressed.connect(_open_privacy)
 
@@ -413,15 +700,64 @@ func _build_interface() -> void:
 
 	_privacy_menu = _new_overlay()
 	var privacy_content := _overlay_content(_privacy_menu)
+	privacy_content.add_theme_constant_override("separation", 10)
 	_add_label(privacy_content, "PRIVACIDADE", 40, WHITE)
-	_add_label(privacy_content, "Pong Mobile funciona offline e não tem anúncios.", 15, MUTED)
-	_add_label(privacy_content, "Não coleta nem envia dados pessoais ou de uso.", 15, MUTED)
-	_add_label(privacy_content, "O placar existe somente durante a partida.", 15, MUTED)
+	_add_label(privacy_content, "Pong Pro funciona offline e sem anúncios." if is_pro else "Pong Free funciona offline; publicidade ainda não ativa.", 15, MUTED)
+	_add_label(privacy_content, "Não há cadastro nem análise de comportamento.", 15, MUTED)
+	_add_label(privacy_content, "Preferências e estatísticas Pro ficam no aparelho." if is_pro else "A política será atualizada antes de integrar anúncios.", 15, MUTED)
 	_add_label(privacy_content, "Dúvidas: github.com/pitinga/game-pong-mobile/issues", 14, CYAN)
 	_add_space(privacy_content, 8)
 	var privacy_back_button := _new_button("VOLTAR AO MENU", CYAN, true)
 	privacy_content.add_child(privacy_back_button)
 	privacy_back_button.pressed.connect(_return_to_menu)
+
+	_settings_menu = _new_overlay()
+	var settings_content := _overlay_content(_settings_menu)
+	settings_content.add_theme_constant_override("separation", 5)
+	_add_label(settings_content, "PERSONALIZAÇÃO PRO", 34, WHITE)
+	_ball_value_label = _add_label(settings_content, "TAMANHO DA BOLA: %d%%" % roundi(ball_scale * 100.0), 14, MUTED)
+	_ball_slider = _new_pro_slider(settings_content, ball_scale * 100.0)
+	_ball_slider.value_changed.connect(_set_ball_size)
+	_paddle_value_label = _add_label(settings_content, "ALTURA DAS RAQUETES: %d%%" % roundi(paddle_scale * 100.0), 14, MUTED)
+	_paddle_slider = _new_pro_slider(settings_content, paddle_scale * 100.0)
+	_paddle_slider.value_changed.connect(_set_paddle_size)
+	_add_label(settings_content, "CORES DA QUADRA", 14, MUTED)
+	_theme_selector = _new_option(settings_content)
+	for theme in THEMES:
+		_theme_selector.add_item(theme["name"])
+	_theme_selector.select(theme_index)
+	_theme_selector.item_selected.connect(_select_theme)
+	_add_label(settings_content, "MODO DE JOGO", 14, MUTED)
+	_mode_selector = _new_option(settings_content)
+	for mode_name in ["CLÁSSICO VS CPU", "SOBREVIVÊNCIA", "2 JOGADORES LOCAIS"]:
+		_mode_selector.add_item(mode_name)
+	_mode_selector.select(int(match_mode))
+	_mode_selector.item_selected.connect(_set_mode)
+	_add_label(settings_content, "PONTOS PARA VENCER (CLÁSSICO / 2 JOGADORES)", 13, MUTED)
+	_points_selector = _new_option(settings_content)
+	for score_name in ["7 PONTOS", "11 PONTOS", "21 PONTOS"]:
+		_points_selector.add_item(score_name)
+	_points_selector.select(_points_index())
+	_points_selector.item_selected.connect(_set_points)
+	_add_space(settings_content, 5)
+	var restore_button := _new_button("↺  RESTAURAR TUDO AO PADRÃO", GRID, false)
+	restore_button.custom_minimum_size.y = 39
+	settings_content.add_child(restore_button)
+	restore_button.pressed.connect(_restore_pro_defaults)
+	var settings_back_button := _new_button("VOLTAR AO MENU", CYAN, true)
+	settings_back_button.custom_minimum_size.y = 40
+	settings_content.add_child(settings_back_button)
+	settings_back_button.pressed.connect(_return_to_menu)
+
+	_stats_menu = _new_overlay()
+	var stats_content := _overlay_content(_stats_menu)
+	_add_label(stats_content, "ESTATÍSTICAS PRO", 37, WHITE)
+	_stats_text = _add_label(stats_content, "", 20, MUTED)
+	_stats_text.add_theme_constant_override("line_spacing", 10)
+	_refresh_stats()
+	var stats_back_button := _new_button("VOLTAR AO MENU", CYAN, true)
+	stats_content.add_child(stats_back_button)
+	stats_back_button.pressed.connect(_return_to_menu)
 
 	_pause_button = _new_button("Ⅱ  PAUSAR", GRID, false)
 	_pause_button.set_anchors_preset(PRESET_TOP_RIGHT)
@@ -486,6 +822,25 @@ func _new_button(message: String, color: Color, emphasized: bool) -> Button:
 	button.add_theme_font_size_override("font_size", 17)
 	_style_button(button, color, emphasized)
 	return button
+
+
+func _new_pro_slider(parent: Node, initial_value: float) -> HSlider:
+	var slider := HSlider.new()
+	slider.min_value = 70
+	slider.max_value = 150
+	slider.step = 10
+	slider.value = initial_value
+	slider.custom_minimum_size = Vector2(350, 26)
+	parent.add_child(slider)
+	return slider
+
+
+func _new_option(parent: Node) -> OptionButton:
+	var selector := OptionButton.new()
+	selector.custom_minimum_size = Vector2(350, 34)
+	selector.add_theme_font_size_override("font_size", 15)
+	parent.add_child(selector)
+	return selector
 
 
 func _style_button(button: Button, color: Color, emphasized: bool) -> void:

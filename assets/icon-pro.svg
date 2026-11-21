@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="106" fill="#081526"/>
+  <rect x="248" y="58" width="16" height="48" rx="8" fill="#31506a"/>
+  <rect x="248" y="127" width="16" height="48" rx="8" fill="#31506a"/>
+  <rect x="248" y="196" width="16" height="48" rx="8" fill="#31506a"/>
+  <rect x="248" y="265" width="16" height="48" rx="8" fill="#31506a"/>
+  <rect x="248" y="334" width="16" height="48" rx="8" fill="#31506a"/>
+  <rect x="65" y="161" width="35" height="181" rx="14" fill="#f8cc59"/>
+  <rect x="412" y="111" width="35" height="181" rx="14" fill="#f8cc59"/>
+  <circle cx="318" cy="258" r="29" fill="#fff4cf"/>
+  <rect x="142" y="410" width="228" height="64" rx="24" fill="#f8cc59"/>
+  <text x="256" y="456" font-family="DejaVu Sans,sans-serif" font-size="44" font-weight="900" text-anchor="middle" fill="#081526">PRO</text>
+</svg>

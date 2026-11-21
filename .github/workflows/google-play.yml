@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   android_bundle:
-    name: Godot 4.7.2 · AAB Android 7+ / API 36 / ARM64
+    name: Godot 4.7.2 · AAB Free e Pro · Android 7+ / API 36 / ARM64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -75,21 +75,24 @@ jobs:
           printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/pong-upload.jks"
           test -s "$RUNNER_TEMP/pong-upload.jks"
 
-      - name: Exportar Android App Bundle assinado
+      - name: Exportar os dois Android App Bundles assinados
         env:
           GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ runner.temp }}/pong-upload.jks
           GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && secrets.PLAY_UPLOAD_ALIAS || 'playupload' }}
           GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && secrets.PLAY_UPLOAD_PASSWORD || 'validation-only' }}
         run: |
           mkdir -p build
-          godot --headless --path . --install-android-build-template --export-release "Google Play" build/pong-mobile-release.aab
-          test -s build/pong-mobile-release.aab
-          jarsigner -verify build/pong-mobile-release.aab
+          godot --headless --path . --install-android-build-template --export-release "Google Play" build/pong-mobile-free-release.aab
+          godot --headless --path . --export-release "Google Play Pro" build/pong-mobile-pro-release.aab
+          test -s build/pong-mobile-free-release.aab
+          test -s build/pong-mobile-pro-release.aab
+          jarsigner -verify build/pong-mobile-free-release.aab
+          jarsigner -verify build/pong-mobile-pro-release.aab
 
-      - name: Disponibilizar AAB para envio à Play Store
+      - name: Disponibilizar AABs para envio à Play Store
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release'
         uses: actions/upload-artifact@v6
         with:
-          name: pong-mobile-google-play-release
-          path: build/pong-mobile-release.aab
+          name: pong-mobile-free-e-pro-google-play-release
+          path: build/*-release.aab
           if-no-files-found: error

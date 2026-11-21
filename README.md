@@ -1,6 +1,6 @@
 # Pong Mobile 🏓
 
-Pong arcade **offline**, de um jogador contra o computador, feito em **Godot 4 com GDScript**. Sem anúncios, contas, bibliotecas extras ou imagens pesadas.
+Pong arcade **offline**, feito em **Godot 4 com GDScript**, com duas edições a partir do mesmo projeto: **Free** e **Pro**. A implementação de publicidade na Free está preparada, mas o SDK nativo ainda precisa ser conectado à conta AdMob; até lá, a Free não exibe anúncios. A Pro não terá SDK de publicidade.
 
 ## Funcionalidades
 
@@ -8,12 +8,14 @@ Pong arcade **offline**, de um jogador contra o computador, feito em **Godot 4 c
 - Três dificuldades reais para a CPU: **Fácil, Médio e Difícil** (reação, movimento, antecipação e precisão diferentes).
 - Bola acelera continuamente durante a disputa **e** após cada rebatida, até um limite; a velocidade reinicia após cada ponto.
 - Indicador na tela mostra o nível atual e a velocidade da bola.
-- Placar até **7 pontos** e tela de vencedor.
+- Placar até **7 pontos** na Free; a Pro permite 7, 11 ou 21 pontos.
 - **Pausa**, continuar, reiniciar e voltar ao menu.
 - Efeitos visuais neon e efeitos sonoros sintetizados em tempo de execução.
 - Tela horizontal (**paisagem**), otimizada para celulares Android.
 - Compatibilidade planejada a partir do **Android 7.0**, apenas **ARM64**.
 - Política de privacidade acessível diretamente pelo menu.
+- **Pro**: modo Sobrevivência, dois jogadores no mesmo celular (duas metades da tela), temas de cores, tamanhos da bola e raquetes de 70% a 150%, botão de restauração dos padrões e estatísticas locais.
+- **Free**: botão para conhecer a Pro (mostra "em breve" até publicarmos a ficha da loja) e regra preparada para intersticiais após 4 partidas, intervalo mínimo de 10 minutos e teto de 2 anúncios/hora.
 
 ## Executar
 
@@ -38,21 +40,27 @@ godot --headless --path . --script res://tests/test_pong.gd
 
 1. No Godot, configure **Editor → Editor Settings → Export → Android** com os caminhos do JDK e do Android SDK.
 2. Instale os **Export Templates** da versão 4.7.2 pelo editor.
-3. Em **Project → Export**, selecione **Android** e exporte com **Export With Debug** ativado.
+3. Em **Project → Export**, selecione **Android** (Free) ou **Android Pro** e exporte com **Export With Debug** ativado.
 
 Para gerar pela linha de comando, com o ambiente Android configurado:
 
 ```bash
-godot --headless --path . --export-debug Android build/pong-mobile-debug.apk
+godot --headless --path . --export-debug Android build/pong-mobile-free-debug.apk
+godot --headless --path . --export-debug "Android Pro" build/pong-mobile-pro-debug.apk
 ```
 
-Os commits na branch `main` executam testes e geram um **APK de teste** como artefato do GitHub Actions, desde que o workflow conclua com sucesso. O APK de debug é próprio para instalação manual e testes, **não** para publicação na Play Store. Para publicar na loja, será necessário configurar assinatura de release e gerar um AAB.
+Os commits na branch `main` executam testes e geram **dois APKs de teste** como artefatos do GitHub Actions. Os APKs de debug são próprios para instalação manual, **não** para publicação na Play Store. Ambos possuem identificadores diferentes, podendo coexistir no mesmo celular.
 
 **Atenção:** a chave de assinatura de debug é criada em cada execução do GitHub Actions. Para instalar um APK de uma nova execução sobre o anterior, pode ser necessário desinstalar a versão antiga primeiro, o que apaga os dados locais do app.
 
 ## Google Play (AAB de publicação)
 
-O preset **Google Play** gera um Android App Bundle com Gradle. Mantém **Android 7 / API 24** como mínimo, **API 36** como alvo e somente **ARM64**, pacote `com.pitinga.pongmobile`. O APK de testes continua disponível no preset **Android**.
+Os presets **Google Play** (Free: `com.pitinga.pongmobile`) e **Google Play Pro** (Pro: `com.pitinga.pongmobile.pro`) geram AABs com Gradle. Ambos mantêm **Android 7 / API 24** como mínimo, **API 36** como alvo e apenas **ARM64**.
+
+| Edição | APK de teste | AAB de publicação | Pacote |
+| --- | --- | --- | --- |
+| Free | `Android` | `Google Play` | `com.pitinga.pongmobile` |
+| Pro | `Android Pro` | `Google Play Pro` | `com.pitinga.pongmobile.pro` |
 
 O workflow **AAB Google Play** executa automaticamente uma compilação de **validação com chave descartável**. Esse arquivo de validação **não deve ser enviado à loja**. Para obter o AAB definitivo:
 
@@ -66,29 +74,36 @@ O workflow **AAB Google Play** executa automaticamente uma compilação de **val
    - `PLAY_UPLOAD_KEYSTORE_BASE64`: Base64 do arquivo de keystore (gerado com `[Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\pong-upload.jks"))` no PowerShell).
    - `PLAY_UPLOAD_ALIAS`: `playupload`.
    - `PLAY_UPLOAD_PASSWORD`: senha escolhida no `keytool`.
-3. Execute **Actions → AAB Google Play → Run workflow → release**. O artefato `pong-mobile-google-play-release` contém o AAB assinado para envio ao Play Console.
+3. Execute **Actions → AAB Google Play → Run workflow → release**. O artefato `pong-mobile-free-e-pro-google-play-release` contém **dois AABs assinados**, um para cada ficha na Play Store.
 4. Configure o **Google Play App Signing** na primeira versão, envie o AAB, preencha as declarações e siga as exigências de testes da sua conta.
 
 **Nunca** envie o arquivo de keystore nem suas senhas ao GitHub como código, nem os cole nesta conversa. Guarde uma cópia segura da chave. O identificador do pacote será definitivo depois da publicação.
 
+**Publicidade Free:** a política de frequência já é testada em `scripts/ad_policy.gd`, mas **não há SDK AdMob instalado nem anúncio ativo**. Não publicar a Free afirmando conter anúncios antes de completar [a integração e as declarações necessárias](store/admob-setup.md). Nunca publicar IDs de anúncios de teste como se fossem IDs de produção. A Pro permanece sem SDK de publicidade.
+
+**Link para a Pro:** o botão da Free ainda informa "em breve". Depois de a ficha Pro estar pública, ativar a feature tag `pong_pro_store_live` no preset Free para habilitar o link oficial à Play Store.
+
 ### Materiais para a ficha da loja
 
-- [Descrição e checklist da publicação](store/listing-pt-BR.md)
+- [Ficha Free](store/listing-pt-BR.md) e [ficha Pro](store/listing-pro-pt-BR.md)
 - `store/icon-512.png` — ícone 512×512
 - `store/feature-graphic.png` — imagem promocional 1024×500
-- `store/screenshots/` — capturas do jogo, geradas por **Actions → Capturas Google Play**
+- `store/icon-pro-512.png` e `store/feature-graphic-pro.png` — arte exclusiva da Pro
+- `store/screenshots/` e `store/screenshots/pro/` — capturas reais, geradas por **Actions → Capturas Google Play**
 - [Política de privacidade](docs/privacy-policy.html) — publicar como página estática pública, por exemplo pelo GitHub Pages, antes de preencher a URL no Play Console
+- [Política Pro](docs/privacy-policy-pro.html) — sem anúncios e com dados de configurações/estatísticas armazenados localmente
 
 ## Estrutura
 
 ```text
-assets/icon.svg             Ícone vetorial do jogo
+assets/icon.svg             Ícone Free; icon-pro.svg da Pro
 scenes/main.tscn            Cena principal
-scripts/pong.gd             Interface, física, IA e sons
-tests/test_pong.gd          Testes automatizados de regras
-export_presets.cfg          Configuração de exportação Android
-.github/workflows/          Testes e geração do APK
-docs/privacy-policy.html    Política de privacidade
+scripts/pong.gd             Interface, física, IA, modos e estatísticas
+scripts/ad_policy.gd        Regras de frequência de anúncios Free
+tests/test_pong.gd          Testes de jogabilidade, edições e anúncios
+export_presets.cfg          Presets de exportação Free e Pro
+.github/workflows/          Testes, APKs e AABs
+docs/                      Políticas de privacidade Free e Pro
 store/                      Textos e artes da Google Play
 ```
 

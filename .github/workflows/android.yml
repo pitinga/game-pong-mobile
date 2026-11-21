@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   android:
-    name: Godot 4.7.2 · Testes + APK
+    name: Godot 4.7.2 · Testes + APK Free e Pro
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -51,20 +51,22 @@ jobs:
           printf 'export/android/java_sdk_path = "%s"\n' "$JAVA_HOME" >> "$settings_file"
           keytool -genkeypair -keystore "$RUNNER_TEMP/pong-debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
 
-      - name: Gerar APK de teste (ARM64)
+      - name: Gerar APKs de teste Free e Pro (ARM64)
         env:
           GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ runner.temp }}/pong-debug.keystore
           GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
           GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
         run: |
           mkdir -p build
-          godot --headless --path . --export-debug Android build/pong-mobile-debug.apk
-          test -s build/pong-mobile-debug.apk
+          godot --headless --path . --export-debug Android build/pong-mobile-free-debug.apk
+          godot --headless --path . --export-debug "Android Pro" build/pong-mobile-pro-debug.apk
+          test -s build/pong-mobile-free-debug.apk
+          test -s build/pong-mobile-pro-debug.apk
 
-      - name: Publicar APK como artefato
+      - name: Publicar os dois APKs como artefatos
         uses: actions/upload-artifact@v6
         with:
-          name: pong-mobile-android-debug
-          path: build/pong-mobile-debug.apk
+          name: pong-mobile-android-free-e-pro-debug
+          path: build/*-debug.apk
           if-no-files-found: error
 
