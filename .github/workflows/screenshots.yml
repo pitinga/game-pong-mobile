@@ -45,11 +45,5 @@ jobs:
           test -s store/screenshots/pro/04-vitoria.png
           test -s store/screenshots/pro/05-estatisticas.png
 
-      - name: Publicar imagens
-        uses: actions/upload-artifact@v6
-        with:
-          name: pong-mobile-free-e-pro-screenshots
-          path: |
-            store/screenshots/*.png
-            store/screenshots/pro/*.png
-          if-no-files-found: error
+      # Repo público: validar imagens sem disponibilizar artefatos do workflow.
+      # As capturas versionadas em store/screenshots/ continuam públicas como fonte.

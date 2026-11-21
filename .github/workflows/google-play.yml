@@ -4,15 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Validar compilação ou gerar AAB assinado para a Play Store'
-        required: true
-        type: choice
-        default: validation
-        options:
-          - validation
-          - release
 
 permissions:
   contents: read
@@ -65,28 +56,14 @@ jobs:
           printf 'export/android/java_sdk_path = "%s"\n' "$JAVA_HOME" >> "$settings_file"
 
       - name: Chave descartável para validar o AAB
-        if: github.event_name != 'workflow_dispatch' || inputs.mode != 'release'
         run: |
           keytool -genkeypair -keystore "$RUNNER_TEMP/pong-upload.jks" -storepass validation-only -keypass validation-only -alias playupload -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=Pong Validation,O=Pitinga,C=BR'
 
-      - name: Usar chave privada de upload (somente publicação)
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release'
-        env:
-          UPLOAD_KEYSTORE_BASE64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 }}
-          UPLOAD_KEY_ALIAS: ${{ secrets.PLAY_UPLOAD_ALIAS }}
-          UPLOAD_KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_PASSWORD }}
-        run: |
-          test -n "$UPLOAD_KEYSTORE_BASE64"
-          test -n "$UPLOAD_KEY_ALIAS"
-          test -n "$UPLOAD_KEY_PASSWORD"
-          printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/pong-upload.jks"
-          test -s "$RUNNER_TEMP/pong-upload.jks"
-
-      - name: Exportar os dois Android App Bundles assinados
+      - name: Validar dois AABs com chave descartável (não publicar)
         env:
           GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ runner.temp }}/pong-upload.jks
-          GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && secrets.PLAY_UPLOAD_ALIAS || 'playupload' }}
-          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && secrets.PLAY_UPLOAD_PASSWORD || 'validation-only' }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: playupload
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: validation-only
         run: |
           mkdir -p build
           godot --headless --path . --install-android-build-template --export-release "Google Play" build/pong-mobile-free-release.aab
@@ -96,10 +73,5 @@ jobs:
           jarsigner -verify build/pong-mobile-free-release.aab
           jarsigner -verify build/pong-mobile-pro-release.aab
 
-      - name: Disponibilizar AABs para envio à Play Store
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release'
-        uses: actions/upload-artifact@v6
-        with:
-          name: pong-mobile-free-e-pro-google-play-release
-          path: build/*-release.aab
-          if-no-files-found: error
+      # Por segurança, o workflow público não acessa chaves reais de publicação,
+      # não cria artifacts e não disponibiliza AAB para download.

@@ -17,6 +17,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Impedir distribuição pública de builds
+        run: |
+          if grep -REn 'uses: *actions/[u]pload-artifact@|secrets\.PLAY_UPLOAD_|gh release (create|upload)' .github/workflows; then
+            echo '::error::Workflows públicos não podem publicar builds ou usar chaves de assinatura de produção.'
+            exit 1
+          fi
+
       - name: Java 17 (compatibilidade com Godot Android)
         uses: actions/setup-java@v6
         with:
@@ -79,10 +86,6 @@ jobs:
           "$aapt" dump badging build/pong-mobile-free-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
           "$aapt" dump badging build/pong-mobile-pro-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
 
-      - name: Publicar os dois APKs como artefatos
-        uses: actions/upload-artifact@v6
-        with:
-          name: pong-mobile-android-free-e-pro-debug
-          path: build/*-debug.apk
-          if-no-files-found: error
+      # Repo público: os APKs só existem no runner efêmero.
+      # Nunca publicar Free/Pro em artifacts, releases ou caches públicos.
 

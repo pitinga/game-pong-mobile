@@ -1,0 +1,40 @@
+name: Limpar artefatos públicos antigos
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-public-artifacts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Excluir arquivos públicos de execuções anteriores
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Remover artefatos deste repositório
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Listar todos os IDs antes de excluir: paginar durante exclusões
+          # poderia fazer alguns IDs desaparecerem das páginas seguintes.
+          artifacts="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --jq '.artifacts[] | "\(.id)\t\(.name)"')"
+          if [[ -z "$artifacts" ]]; then
+            echo 'Nenhum artefato público restante.'
+            exit 0
+          fi
+
+          removed=0
+          while IFS=$'\t' read -r artifact_id artifact_name; do
+            [[ "$artifact_id" =~ ^[0-9]+$ ]] || { echo 'Identificador inesperado; abortando.'; exit 1; }
+            echo "Excluindo ${artifact_name} (#${artifact_id})"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" >/dev/null
+            removed=$((removed + 1))
+          done <<< "$artifacts"
+          echo "Artefatos excluídos: ${removed}"
