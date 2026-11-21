@@ -62,7 +62,7 @@ Versão Free com três dificuldades, aceleração progressiva da bola e controle
 - Definir o e-mail público de suporte no Play Console.
 - Publicar a política em URL estática pública e adicioná-la à Play Console.
 - Gerar e guardar uma chave de upload privada. **Nunca colocar a chave ou senha no Git.**
-- Cadastrar os segredos de assinatura no GitHub Actions.
-- Executar o workflow `AAB Google Play` no modo `release` e enviar o AAB no Play Console.
+- Assinar e exportar o AAB localmente com a chave privada, conforme o README; o workflow público faz somente validação com chave descartável.
+- Enviar o AAB local pelo Play Console, sem publicá-lo como artefato de repositório público.
 - Preencher classificação indicativa, público-alvo, declarações de conteúdo e segurança de dados.
 - Se aplicável à conta pessoal nova, organizar 12 testadores para 14 dias de teste fechado.

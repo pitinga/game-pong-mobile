@@ -48,6 +48,6 @@ O Pong Mobile Pro funciona em celulares Android 7 ou mais recentes com arquitetu
 
 - Aprovação da conta Google Play.
 - Confirmar nome, preço e pacote definitivo antes de cadastrar.
-- Gerar upload keystore privado e configurar Secrets do GitHub Actions.
+- Gerar upload keystore privado e assinar o AAB localmente; não usar Secrets de produção no GitHub Actions público.
 - Habilitar a página estática de privacidade e preencher informações da loja.
 - Realizar testes fechados exigidos para cada aplicativo em conta nova, quando aplicável.

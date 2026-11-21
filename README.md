@@ -60,7 +60,7 @@ godot --headless --path . --export-debug Android build/pong-mobile-free-debug.ap
 godot --headless --path . --export-debug "Android Pro" build/pong-mobile-pro-debug.apk
 ```
 
-Os commits na branch `main` executam testes e geram **dois APKs de teste** como artefatos do GitHub Actions. Os APKs de debug são próprios para instalação manual, **não** para publicação na Play Store. Ambos possuem identificadores diferentes, podendo coexistir no mesmo celular.
+Os commits na branch `main` executam testes e **compilam dois APKs de teste para validação**, mas **não os disponibilizam como artefatos**: o repositório é público e qualquer pessoa com acesso de leitura poderia baixar APKs publicados pelo GitHub Actions. Para obter um APK para instalação manual, exporte-o localmente pelos comandos acima, ou use um processo de distribuição **fora deste repositório público**, com acesso privado. APKs de debug **não** são para publicação na Play Store. Free e Pro possuem identificadores diferentes e podem coexistir no mesmo celular.
 
 **Atenção:** a chave de assinatura de debug é criada em cada execução do GitHub Actions. Para instalar um APK de uma nova execução sobre o anterior, pode ser necessário desinstalar a versão antiga primeiro, o que apaga os dados locais do app.
 
@@ -73,7 +73,7 @@ Os presets **Google Play** (Free: `com.pitinga.pongmobile`) e **Google Play Pro*
 | Free | `Android` | `Google Play` | `com.pitinga.pongmobile` |
 | Pro | `Android Pro` | `Google Play Pro` | `com.pitinga.pongmobile.pro` |
 
-O workflow **AAB Google Play** executa automaticamente uma compilação de **validação com chave descartável**. Esse arquivo de validação **não deve ser enviado à loja**. Para obter o AAB definitivo:
+O workflow **AAB Google Play** executa automaticamente uma compilação de **validação com chave descartável**, mas **não publica nem disponibiliza AABs para download**. Esse arquivo de validação **não deve ser enviado à loja**. O modo de assinatura de produção foi retirado do GitHub Actions público. Para obter o AAB definitivo com segurança:
 
 1. No seu computador, crie um keystore de upload exclusivo e faça backup seguro dele. Exemplo no PowerShell 7, com `keytool` no PATH (a senha será solicitada):
 
@@ -81,14 +81,20 @@ O workflow **AAB Google Play** executa automaticamente uma compilação de **val
    keytool -genkeypair -keystore "$env:USERPROFILE\pong-upload.jks" -storetype PKCS12 -alias playupload -keyalg RSA -keysize 3072 -validity 10000 -dname "CN=Pong Mobile,O=Pitinga,C=BR"
    ```
 
-2. Em **GitHub → Settings → Secrets and variables → Actions**, configure três *Repository secrets*:
-   - `PLAY_UPLOAD_KEYSTORE_BASE64`: Base64 do arquivo de keystore (gerado com `[Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\pong-upload.jks"))` no PowerShell).
-   - `PLAY_UPLOAD_ALIAS`: `playupload`.
-   - `PLAY_UPLOAD_PASSWORD`: senha escolhida no `keytool`.
-3. Execute **Actions → AAB Google Play → Run workflow → release**. O artefato `pong-mobile-free-e-pro-google-play-release` contém **dois AABs assinados**, um para cada ficha na Play Store.
-4. Configure o **Google Play App Signing** na primeira versão, envie o AAB, preencha as declarações e siga as exigências de testes da sua conta.
+2. No PowerShell 7 do seu computador, com o Android SDK e os Export Templates configurados no Godot 4.7.2, use a chave **local**, sem enviá-la ao repositório:
 
-**Nunca** envie o arquivo de keystore nem suas senhas ao GitHub como código, nem os cole nesta conversa. Guarde uma cópia segura da chave. O identificador do pacote será definitivo depois da publicação.
+   ```powershell
+   $env:GODOT_ANDROID_KEYSTORE_RELEASE_PATH = "$env:USERPROFILE\pong-upload.jks"
+   $env:GODOT_ANDROID_KEYSTORE_RELEASE_USER = 'playupload'
+   $env:GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD = Read-Host -MaskInput 'Senha da chave de upload'
+   godot --headless --path . --install-android-build-template --export-release 'Google Play' build/pong-mobile-free-release.aab
+   godot --headless --path . --export-release 'Google Play Pro' build/pong-mobile-pro-release.aab
+   Remove-Item Env:\GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD
+   ```
+
+3. Confira os dois arquivos locais e suas assinaturas (`jarsigner -verify`), configure o **Google Play App Signing** na primeira versão, envie os AABs pelo Play Console e preencha as declarações e os testes exigidos.
+
+**Nunca** envie o arquivo de keystore, senhas ou AABs assinados ao GitHub público, nem os cole nesta conversa. Guarde uma cópia segura da chave. O identificador do pacote será definitivo depois da publicação. Os logs dos workflows continuam públicos porque o repositório é público; por isso nenhuma credencial de produção é usada neles.
 
 **Publicidade Free:** a política de frequência e o ciclo assíncrono por ID de solicitação já são testados com adaptadores simulados, incluindo timeout, recuperação terminal nativa, retomada do app e callbacks antigos. Uma falha que não permita recuperação segura mantém o resultado bloqueado, mas oferece **Fechar jogo**. **Não há SDK AdMob instalado nem anúncio ativo**. O ponto de integração está em `scripts/pong.gd` (`set_interstitial_adapter`). Não publicar a Free afirmando conter anúncios antes de completar [a integração e as declarações necessárias](store/admob-setup.md). Nunca publicar IDs de anúncios de teste como se fossem IDs de produção. A Pro permanece sem SDK de publicidade.
 
@@ -102,7 +108,7 @@ As decisões de jogabilidade e a matriz de proporções estão em [Revisão téc
 - `store/icon-512.png` — ícone 512×512
 - `store/feature-graphic.png` — imagem promocional 1024×500
 - `store/icon-pro-512.png` e `store/feature-graphic-pro.png` — arte exclusiva da Pro
-- `store/screenshots/` e `store/screenshots/pro/` — capturas reais, geradas por **Actions → Capturas Google Play**
+- `store/screenshots/` e `store/screenshots/pro/` — capturas reais versionadas; **Actions → Capturas Google Play** verifica a geração sem publicar artefatos adicionais
 - [Política de privacidade](docs/privacy-policy.html) — publicar como página estática pública, por exemplo pelo GitHub Pages, antes de preencher a URL no Play Console
 - [Política Pro](docs/privacy-policy-pro.html) — sem anúncios e com dados de configurações/estatísticas armazenados localmente
 
