@@ -11,6 +11,10 @@ const SETTINGS_FILE := "user://pong_pro_settings.cfg"
 const STATS_FILE := "user://pong_pro_stats.cfg"
 const AD_POLICY_FILE := "user://pong_free_ad_policy.cfg"
 const AD_REQUEST_TIMEOUT_MSEC := 8000
+const AD_SHOWING_TIMEOUT_MSEC := 120000
+const AD_RECOVERY_RETRY_MSEC := 4000
+const IMPACT_EPSILON := 0.000001
+const MAX_IMPACTS_PER_SUBSTEP := 12
 
 const BG := Color("#081526")
 const GRID := Color("#183047")
@@ -59,6 +63,8 @@ var _stats := {
 	"standard_wins": 0, "standard_losses": 0,
 	"custom_wins": 0, "custom_losses": 0,
 }
+# Marcador durável de tentativa competitiva não finalizada. Pausa não limpa.
+var _active_classic_match := false
 var _ad_policy = AdPolicy.new()
 # O SDK será conectado por um adaptador apenas na edição Free. Sem adaptador,
 # nenhum anúncio é solicitado ou exibido.
@@ -68,7 +74,8 @@ var _interstitial_state: InterstitialState = InterstitialState.IDLE
 var _ad_request_sequence := 0
 var _active_ad_request_id := -1
 var _ad_requested_at_ticks := 0
-var _ad_cancel_attempted := false
+var _ad_next_recovery_attempt_ticks := 0
+var _ad_recovery_needed := false
 var _ad_requests: Dictionary = {}
 var _match_id := 0
 var _finished_match_id := -1
@@ -104,6 +111,8 @@ var _finish_title: Label
 var _finish_score: Label
 var _finish_again_button: Button
 var _finish_exit_button: Button
+var _ad_status_label: Label
+var _ad_safe_exit_button: Button
 var _pause_button: Button
 var _ball_value_label: Label
 var _paddle_value_label: Label
@@ -138,14 +147,26 @@ func _process(_delta: float) -> void:
 	if not is_instance_valid(_interstitial_adapter):
 		_mark_ad_request_canceled(_active_ad_request_id)
 		_finish_ad_request(_active_ad_request_id)
-	elif _interstitial_state == InterstitialState.REQUESTED and not _ad_cancel_attempted \
-			and Time.get_ticks_msec() - _ad_requested_at_ticks >= AD_REQUEST_TIMEOUT_MSEC:
-		_ad_cancel_attempted = true
-		# O adaptador só confirma cancelamento se assegurar que não abrirá
-		# a publicidade depois. Se não puder, aguardamos close/fail nativo.
-		if _interstitial_adapter.cancel_interstitial(_active_ad_request_id):
-			_mark_ad_request_canceled(_active_ad_request_id)
-			_finish_ad_request(_active_ad_request_id)
+		return
+	var now := Time.get_ticks_msec()
+	var elapsed := now - _ad_requested_at_ticks
+	var timeout := AD_REQUEST_TIMEOUT_MSEC if _interstitial_state == InterstitialState.REQUESTED else AD_SHOWING_TIMEOUT_MSEC
+	if elapsed < timeout or now < _ad_next_recovery_attempt_ticks:
+		return
+	_ad_next_recovery_attempt_ticks = now + AD_RECOVERY_RETRY_MSEC
+	# REQUESTED pode cancelar; SHOWING só pode ser liberado por fechamento
+	# nativo ou recuperação explicitamente confirmada como terminal.
+	if _interstitial_state == InterstitialState.REQUESTED and _interstitial_adapter.cancel_interstitial(_active_ad_request_id):
+		_mark_ad_request_canceled(_active_ad_request_id)
+		_finish_ad_request(_active_ad_request_id)
+		return
+	_ad_recovery_needed = true
+	_update_ad_status()
+	# True significa que a camada nativa já desmontou a tela cheia e
+	# impede qualquer apresentação atrasada deste request_id.
+	if _interstitial_adapter.recover_interstitial(_active_ad_request_id):
+		_mark_ad_request_canceled(_active_ad_request_id)
+		_finish_ad_request(_active_ad_request_id)
 
 
 func _physics_process(delta: float) -> void:
@@ -181,36 +202,13 @@ func _physics_process(delta: float) -> void:
 	var substeps := maxi(1, ceili(ball_velocity.length() * delta / ball_radius))
 	var step_delta := delta / float(substeps)
 	for step_index in range(substeps):
-		var start := ball_position
-		var target := start + ball_velocity * step_delta
 		var start_progress := float(step_index) / float(substeps)
 		var end_progress := float(step_index + 1) / float(substeps)
 		var player_start := lerpf(player_y_before, player_y, start_progress)
 		var player_end := lerpf(player_y_before, player_y, end_progress)
 		var cpu_start := lerpf(cpu_y_before, cpu_y, start_progress)
 		var cpu_end := lerpf(cpu_y_before, cpu_y, end_progress)
-		var impact_time := -1.0
-		var hit_player := false
-		if ball_velocity.x < 0.0:
-			impact_time = _sweep_paddle_contact(start, target, PADDLE_MARGIN, player_start, player_end, true)
-			hit_player = true
-		elif ball_velocity.x > 0.0:
-			impact_time = _sweep_paddle_contact(start, target, size.x - PADDLE_MARGIN, cpu_start, cpu_end, false)
-		if impact_time >= 0.0:
-			ball_position = start.lerp(target, impact_time)
-			var paddle_y_at_contact := lerpf(player_start, player_end, impact_time) if hit_player else lerpf(cpu_start, cpu_end, impact_time)
-			_bounce_from_paddle(hit_player, paddle_y_at_contact)
-			# A nova velocidade percorre o restante do passo, sem perder tempo.
-			ball_position += ball_velocity * step_delta * (1.0 - impact_time)
-		else:
-			ball_position = target
-		_check_wall_collisions()
-		if ball_position.x < -ball_radius:
-			_score_point(false)
-			queue_redraw()
-			return
-		elif ball_position.x > size.x + ball_radius:
-			_score_point(true)
+		if _advance_ball_substep(step_delta, player_start, player_end, cpu_start, cpu_end):
 			queue_redraw()
 			return
 
@@ -220,18 +218,96 @@ func _physics_process(delta: float) -> void:
 	queue_redraw()
 
 
-func _check_wall_collisions() -> void:
+func _advance_ball_substep(step_delta: float, player_start: float, player_end: float, cpu_start: float, cpu_end: float) -> bool:
+	## Resolve eventos na ordem temporal: parede, face/canto da raquete e gol.
+	## Cada evento consome apenas seu tempo; o restante segue com nova direção.
+	var elapsed := 0.0
+	var remaining := step_delta
+	var impacts := 0
 	var radius := _ball_radius()
 	var top := FIELD_MARGIN + radius
 	var bottom := size.y - FIELD_MARGIN - radius
-	if ball_position.y <= top and ball_velocity.y < 0.0:
-		ball_position.y = top
-		ball_velocity.y = -ball_velocity.y
-		_play_sound("wall")
-	elif ball_position.y >= bottom and ball_velocity.y > 0.0:
-		ball_position.y = bottom
-		ball_velocity.y = -ball_velocity.y
-		_play_sound("wall")
+	while remaining > IMPACT_EPSILON and impacts < MAX_IMPACTS_PER_SUBSTEP:
+		var start := ball_position
+		var finish := start + ball_velocity * remaining
+		var paddle_progress := elapsed / step_delta if step_delta > 0.0 else 0.0
+		var current_player_y := lerpf(player_start, player_end, paddle_progress)
+		var current_cpu_y := lerpf(cpu_start, cpu_end, paddle_progress)
+		var first_t := 1.0 + IMPACT_EPSILON
+		var event := 0 # 0=nada, 1=raquete, 2=parede, 3=gol
+		var hit_player := false
+		if ball_velocity.x < 0.0:
+			var t := _sweep_paddle_contact(start, finish, PADDLE_MARGIN, current_player_y, player_end, true)
+			if t >= 0.0 and t <= 1.0:
+				first_t = t
+				event = 1
+				hit_player = true
+		elif ball_velocity.x > 0.0:
+			var t := _sweep_paddle_contact(start, finish, size.x - PADDLE_MARGIN, current_cpu_y, cpu_end, false)
+			if t >= 0.0 and t <= 1.0:
+				first_t = t
+				event = 1
+
+		# Empate é resolvido pela parede primeiro, depois pela raquete no t=0.
+		if ball_velocity.y < -IMPACT_EPSILON and finish.y <= top:
+			var t := clampf((top - start.y) / (finish.y - start.y), 0.0, 1.0)
+			if t <= first_t + IMPACT_EPSILON:
+				first_t = t
+				event = 2
+		elif ball_velocity.y > IMPACT_EPSILON and finish.y >= bottom:
+			var t := clampf((bottom - start.y) / (finish.y - start.y), 0.0, 1.0)
+			if t <= first_t + IMPACT_EPSILON:
+				first_t = t
+				event = 2
+
+		if ball_velocity.x < -IMPACT_EPSILON and finish.x <= -radius:
+			var t := clampf((-radius - start.x) / (finish.x - start.x), 0.0, 1.0)
+			if t < first_t - IMPACT_EPSILON:
+				first_t = t
+				event = 3
+		elif ball_velocity.x > IMPACT_EPSILON and finish.x >= size.x + radius:
+			var t := clampf((size.x + radius - start.x) / (finish.x - start.x), 0.0, 1.0)
+			if t < first_t - IMPACT_EPSILON:
+				first_t = t
+				event = 3
+
+		if event == 0:
+			ball_position = finish
+			return false
+		ball_position = start.lerp(finish, first_t)
+		elapsed += remaining * first_t
+		remaining *= 1.0 - first_t
+		impacts += 1
+		match event:
+			1:
+				var contact_progress := elapsed / step_delta if step_delta > 0.0 else 0.0
+				var paddle_y: float = lerpf(player_start, player_end, contact_progress) if hit_player else lerpf(cpu_start, cpu_end, contact_progress)
+				_separate_from_paddle_front(hit_player, paddle_y)
+				_bounce_from_paddle(hit_player, paddle_y)
+			2:
+				ball_position.y = top if ball_velocity.y < 0.0 else bottom
+				ball_velocity.y = -ball_velocity.y
+				_play_sound("wall")
+			3:
+				_score_point(ball_velocity.x > 0.0)
+				return true
+	if remaining > IMPACT_EPSILON:
+		# Falha defensiva explícita: não permitir atravessar paredes/raquetes
+		# sem diagnóstico se um estado patológico gerar impactos infinitos.
+		push_warning("Limite de impactos por subpasso alcançado; movimento interrompido nesta física.")
+	return false
+
+
+func _separate_from_paddle_front(is_player: bool, paddle_y: float) -> void:
+	## Resolve sobreposições introduzidas por teleporte do toque imediato.
+	## A bola não pode ser recuperada depois de cruzar a face da raquete.
+	var radius := _ball_radius()
+	var outside_y := maxf(0.0, absf(ball_position.y - paddle_y) - _paddle_height() * 0.5)
+	var front_clearance := sqrt(maxf(0.0, radius * radius - outside_y * outside_y))
+	if is_player:
+		ball_position.x = maxf(ball_position.x, PADDLE_MARGIN + PADDLE_WIDTH * 0.5 + front_clearance)
+	else:
+		ball_position.x = minf(ball_position.x, size.x - PADDLE_MARGIN - PADDLE_WIDTH * 0.5 - front_clearance)
 
 
 
@@ -247,6 +323,11 @@ func _sweep_paddle_contact(start: Vector2, finish: Vector2, paddle_x: float, sta
 	var d := Vector2(finish.x - start.x, finish.y - start.y - (finish_y - start_y))
 	if front_sign * p.x < half_width - 0.0001 or front_sign * d.x >= 0.0:
 		return -1.0
+	# O toque é instantâneo: pode posicionar a raquete já sobre uma bola
+	# ainda à frente da face. Contato válido apenas se ela estiver chegando.
+	var nearest_on_rect := Vector2(clampf(p.x, -half_width, half_width), clampf(p.y, -half_height, half_height))
+	if p.distance_squared_to(nearest_on_rect) <= radius * radius + IMPACT_EPSILON:
+		return 0.0
 	var nearest := 2.0
 	# Face frontal reta.
 	if absf(d.x) > 0.000001:
@@ -260,7 +341,7 @@ func _sweep_paddle_contact(start: Vector2, finish: Vector2, paddle_x: float, sta
 				continue
 			var t: float = (side * (half_height + radius) - p.y) / d.y
 			var x: float = p.x + d.x * t
-			if t >= 0.0 and t <= 1.0 and front_sign * x >= 0.0 and front_sign * x <= half_width:
+			if t >= 0.0 and t <= 1.0 and front_sign * x >= half_width - 0.0001:
 				nearest = minf(nearest, t)
 	# Cantos arredondados pela geometria real do círculo: distância euclidiana.
 	var speed_squared := d.length_squared()
@@ -361,6 +442,9 @@ func _clear_touch_captures() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED and _active_ad_request_id != -1:
+		_ad_next_recovery_attempt_ticks = 0
+		_process(0.0)
 	if what in [NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT] and state == GameState.PLAYING:
 		state = GameState.PAUSED
 		_clear_touch_captures()
@@ -411,11 +495,17 @@ func _draw() -> void:
 	_draw_centered("REBATIDAS" if match_mode == MatchMode.SURVIVAL else "P1" if match_mode == MatchMode.TWO_PLAYERS else "VOCÊ", Vector2(w * 0.42, 106), 13, MUTED)
 	_draw_centered("P2" if match_mode == MatchMode.TWO_PLAYERS else "COMPUTADOR", Vector2(w * 0.58, 106), 13, MUTED)
 	if state == GameState.PLAYING:
-		var speed_ratio := maxf(1.0, ball_velocity.length() / BASE_BALL_SPEED)
-		_draw_centered("2 JOGADORES   •   BOLA %.1fx" % speed_ratio if match_mode == MatchMode.TWO_PLAYERS else "NÍVEL %s   •   BOLA %.1fx" % [DIFFICULTIES[difficulty], speed_ratio], Vector2(w * 0.5, 143), 14, MUTED)
+		var speed_label := "PRÓXIMA BOLA" if _serve_countdown > 0.0 else "BOLA"
+		var speed_caption := "%s %.1fx" % [speed_label, _displayed_ball_speed_ratio()]
+		_draw_centered("2 JOGADORES   •   %s" % speed_caption if match_mode == MatchMode.TWO_PLAYERS else "NÍVEL %s   •   %s" % [DIFFICULTIES[difficulty], speed_caption], Vector2(w * 0.5, 143), 14, MUTED)
 		_draw_centered("CADA JOGADOR CONTROLA SUA METADE" if match_mode == MatchMode.TWO_PLAYERS else "DESLIZE O DEDO PARA MOVER A RAQUETE", Vector2(w * 0.5, h - 31), 14, MUTED)
 		if _serve_countdown > 0.0:
 			_draw_centered("PREPARE-SE", Vector2(w * 0.5, h * 0.39), 26, WHITE)
+
+
+func _displayed_ball_speed_ratio() -> float:
+	var speed: float = _serve_speed if state == GameState.PLAYING and _serve_countdown > 0.0 else ball_velocity.length()
+	return maxf(1.0, speed / BASE_BALL_SPEED)
 
 
 func _draw_paddle(center: Vector2, color: Color) -> void:
@@ -447,6 +537,9 @@ func _start_match() -> void:
 	_reset_positions()
 	state = GameState.PLAYING
 	_reset_round(1.0 if randf() > 0.5 else -1.0)
+	if is_pro and match_mode == MatchMode.CLASSIC:
+		_active_classic_match = true
+		_save_pro_stats()
 	_show_interface()
 	queue_redraw()
 
@@ -504,6 +597,11 @@ func _cpu_reaction_delay() -> float:
 func _reset_positions() -> void:
 	player_y = size.y * 0.5
 	cpu_y = size.y * 0.5
+	_reset_ball_for_serve()
+
+
+func _reset_ball_for_serve() -> void:
+	# Pontos e novos saques não mudam a posição nem a posse dos dedos.
 	_cpu_target_y = cpu_y
 	_cpu_aim_bias = 0.0
 	ball_position = size * 0.5
@@ -512,9 +610,7 @@ func _reset_positions() -> void:
 
 
 func _reset_round(direction: float, next_serve_speed: float = BASE_BALL_SPEED) -> void:
-	# Requer novo press após um ponto; dedo parado não teletransporta raquete.
-	_clear_touch_captures()
-	_reset_positions()
+	_reset_ball_for_serve()
 	_serve_direction = direction
 	_serve_speed = clampf(next_serve_speed, BASE_BALL_SPEED, MAX_BALL_SPEED)
 	_serve_countdown = 0.9
@@ -632,6 +728,7 @@ func _complete_match(won: bool) -> void:
 func set_interstitial_adapter(adapter: Node) -> void:
 	## Contrato do adaptador: is_interstitial_loaded() -> bool,
 	## show_interstitial(id) -> bool, cancel_interstitial(id) -> bool,
+	## recover_interstitial(id) -> bool [garantia nativa terminal],
 	## sinais interstitial_opened/impression/closed/failed(id).
 	## Só conectar ao terminar o SDK/consentimento; a Pro ignora o adaptador.
 	if is_pro:
@@ -657,7 +754,7 @@ func set_interstitial_adapter(adapter: Node) -> void:
 	if not adapter.has_signal("interstitial_opened") or not adapter.has_signal("interstitial_impression") \
 			or not adapter.has_signal("interstitial_closed") or not adapter.has_signal("interstitial_failed") \
 			or not adapter.has_method("is_interstitial_loaded") or not adapter.has_method("show_interstitial") \
-			or not adapter.has_method("cancel_interstitial"):
+			or not adapter.has_method("cancel_interstitial") or not adapter.has_method("recover_interstitial"):
 		push_warning("Adaptador de intersticiais inválido; publicidade desativada.")
 		return
 	_interstitial_adapter = adapter
@@ -684,7 +781,8 @@ func _try_show_interstitial_after_match(match_id: int = -1) -> void:
 	_active_ad_request_id = request_id
 	_interstitial_state = InterstitialState.REQUESTED
 	_ad_requested_at_ticks = Time.get_ticks_msec()
-	_ad_cancel_attempted = false
+	_ad_next_recovery_attempt_ticks = 0
+	_ad_recovery_needed = false
 	_set_ad_buttons_busy(true)
 	if not _interstitial_adapter.show_interstitial(request_id):
 		_on_interstitial_failed(request_id)
@@ -700,6 +798,7 @@ func _try_show_interstitial_after_match(match_id: int = -1) -> void:
 func _on_interstitial_opened(request_id: int) -> void:
 	if request_id == _active_ad_request_id and _interstitial_state == InterstitialState.REQUESTED:
 		_interstitial_state = InterstitialState.SHOWING
+		_update_ad_status()
 
 
 func _on_interstitial_impression(request_id: int) -> void:
@@ -713,6 +812,7 @@ func _on_interstitial_impression(request_id: int) -> void:
 	if request_id == _active_ad_request_id:
 		# O SDK pode sinalizar impressão antes do callback de abertura.
 		_interstitial_state = InterstitialState.SHOWING
+		_update_ad_status()
 	record["impressed"] = true
 	_ad_requests[request_id] = record
 	_ad_policy.record_impression(_ad_now_msec())
@@ -746,6 +846,8 @@ func _finish_ad_request(request_id: int) -> void:
 		return
 	_active_ad_request_id = -1
 	_interstitial_state = InterstitialState.IDLE
+	_ad_recovery_needed = false
+	_ad_next_recovery_attempt_ticks = 0
 	_set_ad_buttons_busy(false)
 
 
@@ -754,6 +856,23 @@ func _set_ad_buttons_busy(busy: bool) -> void:
 		_finish_again_button.disabled = busy
 	if is_instance_valid(_finish_exit_button):
 		_finish_exit_button.disabled = busy
+	_update_ad_status()
+
+
+func _update_ad_status() -> void:
+	if not is_instance_valid(_ad_status_label):
+		return
+	var pending := _active_ad_request_id != -1
+	_ad_status_label.visible = pending
+	_ad_safe_exit_button.visible = pending and _ad_recovery_needed
+	if pending:
+		_ad_status_label.text = "SEM RESPOSTA DO ANÚNCIO — TENTE FECHAR O JOGO" if _ad_recovery_needed else "ANÚNCIO EM EXIBIÇÃO" if _interstitial_state == InterstitialState.SHOWING else "AGUARDANDO ANÚNCIO..."
+
+
+func _quit_after_ad_failure() -> void:
+	# Saída de emergência: nunca retomar gameplay se o SDK não assegurar
+	# que o pedido foi encerrado. O jogador pode abrir o app novamente.
+	get_tree().quit()
 
 
 func _ad_now_msec() -> int:
@@ -856,17 +975,26 @@ func _load_pro_stats() -> void:
 		var classic_count := int(_stats["standard_wins"]) + int(_stats["standard_losses"]) + int(_stats["custom_wins"]) + int(_stats["custom_losses"])
 		_stats["survival_matches"] = maxi(0, int(_stats["played"]) - classic_count - int(_stats["two_player_matches"]))
 	_stats["played"] = _count_pro_matches()
+	_active_classic_match = bool(config.get_value("stats", "active_classic_match", false))
+	if _active_classic_match:
+		# Encerrar processo (inclusive crash) é abandono, não derrota.
+		# Apenas na próxima abertura: suspender/retomar não remove a sequência.
+		_stats["streak"] = 0
+		_active_classic_match = false
+		_save_pro_stats()
 
 
 func _save_pro_stats() -> void:
 	var config := ConfigFile.new()
 	for key in _stats.keys():
 		config.set_value("stats", key, _stats[key])
+	config.set_value("stats", "active_classic_match", _active_classic_match)
 	if config.save(stats_file) != OK:
 		push_warning("Não foi possível guardar as estatísticas do Pong Pro.")
 
 
 func _record_pro_stats(won: bool) -> void:
+	_active_classic_match = false
 	_stats["played"] += 1
 	match match_mode:
 		MatchMode.SURVIVAL:
@@ -891,8 +1019,9 @@ func _break_streak_on_abandon() -> void:
 	# de tentativa ativa quebra a sequência, mas não cria uma derrota.
 	if not is_pro or match_mode != MatchMode.CLASSIC or state not in [GameState.PLAYING, GameState.PAUSED]:
 		return
-	if int(_stats["streak"]) > 0:
+	if int(_stats["streak"]) > 0 or _active_classic_match:
 		_stats["streak"] = 0
+		_active_classic_match = false
 		_save_pro_stats()
 
 
@@ -1058,6 +1187,13 @@ func _build_interface() -> void:
 	_finish_exit_button = _new_button("MENU PRINCIPAL", GRID, false)
 	finish_content.add_child(_finish_exit_button)
 	_finish_exit_button.pressed.connect(_return_to_menu)
+	_ad_status_label = _add_label(finish_content, "AGUARDANDO ANÚNCIO...", 12, MUTED)
+	_ad_status_label.visible = false
+	_ad_safe_exit_button = _new_button("FECHAR JOGO", GRID, false)
+	_ad_safe_exit_button.custom_minimum_size.y = 36
+	finish_content.add_child(_ad_safe_exit_button)
+	_ad_safe_exit_button.visible = false
+	_ad_safe_exit_button.pressed.connect(_quit_after_ad_failure)
 
 	_privacy_menu = _new_overlay()
 	var privacy_content := _overlay_content(_privacy_menu)

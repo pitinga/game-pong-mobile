@@ -30,6 +30,9 @@ class FakeInterstitialAdapter:
 	func cancel_interstitial(_request_id: int) -> bool:
 		return true
 
+	func recover_interstitial(_request_id: int) -> bool:
+		return true
+
 	func confirm_impression() -> void:
 		interstitial_impression.emit(active_request_id)
 
