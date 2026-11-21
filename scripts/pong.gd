@@ -3,12 +3,14 @@ extends Control
 
 enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY, SETTINGS, STATS }
 enum MatchMode { CLASSIC, SURVIVAL, TWO_PLAYERS }
+enum InterstitialState { IDLE, REQUESTED, SHOWING }
 
 const AdPolicy = preload("res://scripts/ad_policy.gd")
 const PRO_STORE_URL := "https://play.google.com/store/apps/details?id=com.pitinga.pongmobile.pro"
 const SETTINGS_FILE := "user://pong_pro_settings.cfg"
 const STATS_FILE := "user://pong_pro_stats.cfg"
 const AD_POLICY_FILE := "user://pong_free_ad_policy.cfg"
+const AD_REQUEST_TIMEOUT_MSEC := 8000
 
 const BG := Color("#081526")
 const GRID := Color("#183047")
@@ -62,7 +64,14 @@ var _ad_policy = AdPolicy.new()
 # nenhum anúncio é solicitado ou exibido.
 var _interstitial_adapter: Node
 var _interstitial_attempted_this_match := false
-var _interstitial_show_pending := false
+var _interstitial_state: InterstitialState = InterstitialState.IDLE
+var _ad_request_sequence := 0
+var _active_ad_request_id := -1
+var _ad_requested_at_ticks := 0
+var _ad_cancel_attempted := false
+var _ad_requests: Dictionary = {}
+var _match_id := 0
+var _finished_match_id := -1
 
 var state: GameState = GameState.MENU
 var difficulty := 1
@@ -92,6 +101,8 @@ var _settings_menu: CenterContainer
 var _stats_menu: CenterContainer
 var _finish_title: Label
 var _finish_score: Label
+var _finish_again_button: Button
+var _finish_exit_button: Button
 var _pause_button: Button
 var _ball_value_label: Label
 var _paddle_value_label: Label
@@ -118,6 +129,22 @@ func _ready() -> void:
 	_show_interface()
 	resized.connect(_on_resized)
 	queue_redraw()
+
+
+func _process(_delta: float) -> void:
+	if _active_ad_request_id == -1:
+		return
+	if not is_instance_valid(_interstitial_adapter):
+		_mark_ad_request_canceled(_active_ad_request_id)
+		_finish_ad_request(_active_ad_request_id)
+	elif _interstitial_state == InterstitialState.REQUESTED and not _ad_cancel_attempted \
+			and Time.get_ticks_msec() - _ad_requested_at_ticks >= AD_REQUEST_TIMEOUT_MSEC:
+		_ad_cancel_attempted = true
+		# O adaptador só confirma cancelamento se assegurar que não abrirá
+		# a publicidade depois. Se não puder, aguardamos close/fail nativo.
+		if _interstitial_adapter.cancel_interstitial(_active_ad_request_id):
+			_mark_ad_request_canceled(_active_ad_request_id)
+			_finish_ad_request(_active_ad_request_id)
 
 
 func _physics_process(delta: float) -> void:
@@ -406,9 +433,11 @@ func _draw_centered(message: String, baseline: Vector2, font_size: int, color: C
 
 
 func _start_match() -> void:
+	if _active_ad_request_id != -1:
+		return
+	_match_id += 1
 	_clear_touch_captures()
 	_interstitial_attempted_this_match = false
-	_interstitial_show_pending = false
 	player_score = 0
 	cpu_score = 0
 	player_won = false
@@ -545,6 +574,8 @@ func _update_cpu(delta: float) -> void:
 
 
 func _score_point(for_player: bool) -> void:
+	if state != GameState.PLAYING:
+		return
 	if match_mode == MatchMode.SURVIVAL:
 		_play_sound("point")
 		if for_player:
@@ -565,6 +596,10 @@ func _score_point(for_player: bool) -> void:
 
 
 func _complete_match(won: bool) -> void:
+	if state != GameState.PLAYING or _finished_match_id == _match_id:
+		return
+	_finished_match_id = _match_id
+	_clear_touch_captures()
 	player_won = won
 	state = GameState.FINISHED
 	if match_mode == MatchMode.SURVIVAL:
@@ -586,36 +621,51 @@ func _complete_match(won: bool) -> void:
 	queue_redraw()
 	if not is_pro:
 		# Oportunidade exclusiva de transição: após o placar final aparecer.
-		call_deferred("_try_show_interstitial_after_match")
+		call_deferred("_try_show_interstitial_after_match", _match_id)
 
 
 func set_interstitial_adapter(adapter: Node) -> void:
 	## Contrato do adaptador: is_interstitial_loaded() -> bool,
-	## show_interstitial() -> bool, sinais interstitial_impression e interstitial_closed.
+	## show_interstitial(id) -> bool, cancel_interstitial(id) -> bool,
+	## sinais interstitial_opened/impression/closed/failed(id).
 	## Só conectar ao terminar o SDK/consentimento; a Pro ignora o adaptador.
 	if is_pro:
 		return
+	if _active_ad_request_id != -1:
+		if is_instance_valid(_interstitial_adapter) and not _interstitial_adapter.cancel_interstitial(_active_ad_request_id):
+			push_warning("Não é seguro substituir o adaptador durante uma exibição pendente.")
+			return
+		_mark_ad_request_canceled(_active_ad_request_id)
+		_finish_ad_request(_active_ad_request_id)
 	if is_instance_valid(_interstitial_adapter):
-		if _interstitial_adapter.interstitial_impression.is_connected(_on_interstitial_impression):
-			_interstitial_adapter.interstitial_impression.disconnect(_on_interstitial_impression)
-		if _interstitial_adapter.interstitial_closed.is_connected(_on_interstitial_closed):
-			_interstitial_adapter.interstitial_closed.disconnect(_on_interstitial_closed)
+		for connection in [
+			["interstitial_opened", Callable(self, "_on_interstitial_opened")],
+			["interstitial_impression", Callable(self, "_on_interstitial_impression")],
+			["interstitial_closed", Callable(self, "_on_interstitial_closed")],
+			["interstitial_failed", Callable(self, "_on_interstitial_failed")],
+		]:
+			if _interstitial_adapter.is_connected(connection[0], connection[1]):
+				_interstitial_adapter.disconnect(connection[0], connection[1])
 	_interstitial_adapter = null
-	_interstitial_show_pending = false
 	if adapter == null:
 		return
-	if not adapter.has_signal("interstitial_impression") or not adapter.has_signal("interstitial_closed") \
-			or not adapter.has_method("is_interstitial_loaded") or not adapter.has_method("show_interstitial"):
+	if not adapter.has_signal("interstitial_opened") or not adapter.has_signal("interstitial_impression") \
+			or not adapter.has_signal("interstitial_closed") or not adapter.has_signal("interstitial_failed") \
+			or not adapter.has_method("is_interstitial_loaded") or not adapter.has_method("show_interstitial") \
+			or not adapter.has_method("cancel_interstitial"):
 		push_warning("Adaptador de intersticiais inválido; publicidade desativada.")
 		return
 	_interstitial_adapter = adapter
+	_interstitial_adapter.interstitial_opened.connect(_on_interstitial_opened)
 	_interstitial_adapter.interstitial_impression.connect(_on_interstitial_impression)
 	_interstitial_adapter.interstitial_closed.connect(_on_interstitial_closed)
+	_interstitial_adapter.interstitial_failed.connect(_on_interstitial_failed)
 
 
-func _try_show_interstitial_after_match() -> void:
+func _try_show_interstitial_after_match(match_id: int = -1) -> void:
 	# Nunca iniciar anúncio durante a partida, em pausa ou no menu.
-	if is_pro or state != GameState.FINISHED or _interstitial_attempted_this_match:
+	if is_pro or state != GameState.FINISHED or _interstitial_attempted_this_match \
+			or _active_ad_request_id != -1 or (match_id >= 0 and match_id != _match_id):
 		return
 	if not is_instance_valid(_interstitial_adapter):
 		return
@@ -623,23 +673,82 @@ func _try_show_interstitial_after_match() -> void:
 		return
 	# Uma tentativa por encerramento; falta de inventário não bloqueia o jogo.
 	_interstitial_attempted_this_match = true
-	_interstitial_show_pending = true
-	if not _interstitial_adapter.show_interstitial():
-		_interstitial_show_pending = false
+	_ad_request_sequence += 1
+	var request_id := _ad_request_sequence
+	_ad_requests[request_id] = {"impressed": false, "canceled": false, "failed": false}
+	_active_ad_request_id = request_id
+	_interstitial_state = InterstitialState.REQUESTED
+	_ad_requested_at_ticks = Time.get_ticks_msec()
+	_ad_cancel_attempted = false
+	_set_ad_buttons_busy(true)
+	if not _interstitial_adapter.show_interstitial(request_id):
+		_on_interstitial_failed(request_id)
+	# Manter somente um histórico recente de IDs para ignorar callbacks
+	# duplicados/antigos sem acumular dados durante meses de partidas.
+	if _ad_requests.size() > 32:
+		var ids := _ad_requests.keys()
+		ids.sort()
+		for old_id in ids.slice(0, ids.size() - 32):
+			_ad_requests.erase(old_id)
 
 
-func _on_interstitial_impression() -> void:
-	# Somente a confirmação nativa de impressão consome o crédito de 4 jogos.
-	if is_pro or not _interstitial_show_pending:
+func _on_interstitial_opened(request_id: int) -> void:
+	if request_id == _active_ad_request_id and _interstitial_state == InterstitialState.REQUESTED:
+		_interstitial_state = InterstitialState.SHOWING
+
+
+func _on_interstitial_impression(request_id: int) -> void:
+	# Aceita impressão de uma solicitação real mesmo após close/navegação;
+	# ID impede que callback antigo seja atribuído a outra tentativa.
+	if is_pro or not _ad_requests.has(request_id):
 		return
-	_interstitial_show_pending = false
+	var record: Dictionary = _ad_requests[request_id]
+	if record["impressed"] or record["canceled"] or record["failed"]:
+		return
+	if request_id == _active_ad_request_id:
+		# O SDK pode sinalizar impressão antes do callback de abertura.
+		_interstitial_state = InterstitialState.SHOWING
+	record["impressed"] = true
+	_ad_requests[request_id] = record
 	_ad_policy.record_impression(_ad_now_msec())
 	if _ad_policy.save_state(ad_policy_file) != OK:
 		push_warning("Não foi possível guardar a impressão do anúncio.")
 
 
-func _on_interstitial_closed() -> void:
-	_interstitial_show_pending = false
+func _on_interstitial_closed(request_id: int) -> void:
+	_finish_ad_request(request_id)
+
+
+func _on_interstitial_failed(request_id: int) -> void:
+	if not _ad_requests.has(request_id):
+		return
+	var record: Dictionary = _ad_requests[request_id]
+	if not record["impressed"]:
+		record["failed"] = true
+		_ad_requests[request_id] = record
+	_finish_ad_request(request_id)
+
+
+func _mark_ad_request_canceled(request_id: int) -> void:
+	if _ad_requests.has(request_id):
+		var record: Dictionary = _ad_requests[request_id]
+		record["canceled"] = true
+		_ad_requests[request_id] = record
+
+
+func _finish_ad_request(request_id: int) -> void:
+	if request_id != _active_ad_request_id:
+		return
+	_active_ad_request_id = -1
+	_interstitial_state = InterstitialState.IDLE
+	_set_ad_buttons_busy(false)
+
+
+func _set_ad_buttons_busy(busy: bool) -> void:
+	if is_instance_valid(_finish_again_button):
+		_finish_again_button.disabled = busy
+	if is_instance_valid(_finish_exit_button):
+		_finish_exit_button.disabled = busy
 
 
 func _ad_now_msec() -> int:
@@ -657,6 +766,8 @@ func _toggle_pause() -> void:
 
 
 func _return_to_menu() -> void:
+	if _active_ad_request_id != -1:
+		return
 	_clear_touch_captures()
 	state = GameState.MENU
 	player_score = 0
@@ -925,12 +1036,12 @@ func _build_interface() -> void:
 	_finish_title = _add_label(finish_content, "FIM DE JOGO", 49, WHITE)
 	_finish_score = _add_label(finish_content, "00   :   00", 35, CYAN)
 	_add_space(finish_content, 12)
-	var again_button := _new_button("JOGAR NOVAMENTE", CYAN, true)
-	finish_content.add_child(again_button)
-	again_button.pressed.connect(_start_match)
-	var exit_button := _new_button("MENU PRINCIPAL", GRID, false)
-	finish_content.add_child(exit_button)
-	exit_button.pressed.connect(_return_to_menu)
+	_finish_again_button = _new_button("JOGAR NOVAMENTE", CYAN, true)
+	finish_content.add_child(_finish_again_button)
+	_finish_again_button.pressed.connect(_start_match)
+	_finish_exit_button = _new_button("MENU PRINCIPAL", GRID, false)
+	finish_content.add_child(_finish_exit_button)
+	_finish_exit_button.pressed.connect(_return_to_menu)
 
 	_privacy_menu = _new_overlay()
 	var privacy_content := _overlay_content(_privacy_menu)

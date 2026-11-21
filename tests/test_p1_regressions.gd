@@ -38,8 +38,9 @@ func _run() -> void:
 	root.size = Vector2i(960, 540)
 	var game: Control = load("res://scenes/main.tscn").instantiate()
 	game.is_pro = true
-	game.settings_file = "user://pong_p1_%d_settings.cfg" % OS.get_process_id()
-	game.stats_file = "user://pong_p1_%d_stats.cfg" % OS.get_process_id()
+	var token := "%d_%d_%d" % [OS.get_process_id(), int(Time.get_unix_time_from_system() * 1000000.0), randi()]
+	game.settings_file = "user://pong_p1_%s_settings.cfg" % token
+	game.stats_file = "user://pong_p1_%s_stats.cfg" % token
 	root.add_child(game)
 	await process_frame
 	game._start_match()
@@ -121,7 +122,7 @@ func _run() -> void:
 	_touch(0, Vector2(130, 250), false)
 	_touch(1, Vector2(150, 400), false)
 	game.free()
-	for file in ["user://pong_p1_%d_settings.cfg" % OS.get_process_id(), "user://pong_p1_%d_stats.cfg" % OS.get_process_id()]:
+	for file in ["user://pong_p1_%s_settings.cfg" % token, "user://pong_p1_%s_stats.cfg" % token]:
 		if FileAccess.file_exists(file):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(file))
 	print("Regressões P1: %d falha(s)." % failures)

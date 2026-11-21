@@ -7,27 +7,34 @@ const AdPolicy = preload("res://scripts/ad_policy.gd")
 
 class FakeInterstitialAdapter:
 	extends Node
-	signal interstitial_impression
-	signal interstitial_closed
+	signal interstitial_opened(request_id: int)
+	signal interstitial_impression(request_id: int)
+	signal interstitial_closed(request_id: int)
+	signal interstitial_failed(request_id: int)
 	var loaded := true
 	var accepts_show := true
 	var show_calls := 0
 	var state_when_shown := -1
+	var active_request_id := -1
 	var game: Control
 
 	func is_interstitial_loaded() -> bool:
 		return loaded
 
-	func show_interstitial() -> bool:
+	func show_interstitial(request_id: int) -> bool:
+		active_request_id = request_id
 		show_calls += 1
 		state_when_shown = game.state
 		return accepts_show
 
+	func cancel_interstitial(_request_id: int) -> bool:
+		return true
+
 	func confirm_impression() -> void:
-		interstitial_impression.emit()
+		interstitial_impression.emit(active_request_id)
 
 	func close_ad() -> void:
-		interstitial_closed.emit()
+		interstitial_closed.emit(active_request_id)
 
 var _failures := 0
 
@@ -108,9 +115,11 @@ func _run_tests() -> void:
 	_check(presets.get_value("preset.1.options", "gradle_build/min_sdk", "") == "24" and presets.get_value("preset.1.options", "gradle_build/target_sdk", "") == "36", "Publicação Free mantém Android 7 e alvo API 36")
 	_check(presets.get_value("preset.2.options", "gradle_build/min_sdk", "") == "24" and presets.get_value("preset.2.options", "gradle_build/target_sdk", "") == "36", "Publicação Pro mantém Android 7 e alvo API 36")
 	_check(ProjectSettings.get_setting("display/window/stretch/aspect") == "expand", "Jogo aproveita telas fora do formato 16:9")
-	var test_settings_file := "user://pong_tests_settings.cfg"
-	var test_stats_file := "user://pong_tests_stats.cfg"
-	var test_ads_file := "user://pong_tests_ads.cfg"
+	# Cada processo tem caminhos exclusivos para execução paralela no mesmo PC.
+	var test_token := "%d_%d_%d" % [OS.get_process_id(), int(Time.get_unix_time_from_system() * 1000000.0), randi()]
+	var test_settings_file := "user://pong_tests_%s_settings.cfg" % test_token
+	var test_stats_file := "user://pong_tests_%s_stats.cfg" % test_token
+	var test_ads_file := "user://pong_tests_%s_ads.cfg" % test_token
 	for test_file in [test_settings_file, test_stats_file, test_ads_file]:
 		if FileAccess.file_exists(test_file):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(test_file))
@@ -308,6 +317,7 @@ func _run_tests() -> void:
 	_check(saved_ad_policy.load_state(test_ads_file) == OK and saved_ad_policy._impressions_msec.size() == 1 and saved_ad_policy.matches_since_ad == 0, "Impressão de verdade é persistida imediatamente")
 	fake_ad.confirm_impression()
 	_check(game._ad_policy._impressions_msec.size() == 1, "Callback duplicado não duplica impressão")
+	fake_ad.close_ad()
 	_finish_free_match(game)
 	await process_frame
 	_check(fake_ad.show_calls == 1, "Não oferece novo anúncio na primeira partida após impressão")
@@ -336,8 +346,9 @@ func _run_tests() -> void:
 	await process_frame
 	_check(fake_ad.show_calls == 3, "Nova partida concluída permite nova tentativa após falha")
 	fake_ad.close_ad()
-	fake_ad.confirm_impression()
 	_check(game._ad_policy.matches_since_ad == 4, "Fechamento sem impressão não reinicia o contador")
+	fake_ad.confirm_impression()
+	_check(game._ad_policy.matches_since_ad == 0, "Impressão confirmada após fechamento continua atribuída à sua requisição")
 	game.set_interstitial_adapter(null)
 	game._return_to_menu()
 	game._try_show_interstitial_after_match()
@@ -421,8 +432,10 @@ func _run_tests() -> void:
 	_check(stored.load(game.settings_file) == OK and is_equal_approx(float(stored.get_value("visual", "ball_scale", 0.0)), 1.0), "Preferências Pro são guardadas localmente")
 	game._set_ball_size(120)
 	game._select_theme(1)
+	game.ball_scale = 0.7
+	game.theme_index = 2
 	game._load_pro_settings()
-	_check(is_equal_approx(game.ball_scale, 1.2) and game.theme_index == 1, "Preferências Pro restauradas do arquivo após atualização")
+	_check(is_equal_approx(game.ball_scale, 1.2) and game.theme_index == 1, "Round-trip restaura arquivo mesmo após alterar apenas a memória")
 	game._restore_pro_defaults()
 
 	var real_pro: Control = load("res://scenes/main.tscn").instantiate()
