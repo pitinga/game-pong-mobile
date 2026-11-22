@@ -292,6 +292,24 @@ func _run() -> void:
 	bridge._on_purchases({"response_code": 0, "purchases": [bought]})
 	bridge._on_purchases({"response_code": 0, "purchases": []})
 	_check(delivered.size() == 5 and not delivered.back(), "Após compra confirmada por consulta, reembolso posterior revoga sem carência")
+	# Desconexão no meio do acknowledge não pode prender o token para sempre.
+	# As consultas anteriores podem ter aberto outro ack; isolamos este caso.
+	bridge._acknowledging.clear()
+	bridge._ack_retry_attempts.clear()
+	var acks_before_disconnect := native.acknowledges.size()
+	bridge._acknowledge_if_needed(bought)
+	_check(native.acknowledges.size() == acks_before_disconnect + 1 and bridge._acknowledging.has("token-fake"), "Acknowledge fica em voo antes da queda")
+	bridge._on_disconnected()
+	_check(not bridge._acknowledging.has("token-fake") and bridge._ack_retry_attempts.has("token-fake"), "Desconexão libera token e preserva tentativa pendente")
+	bridge._on_connected()
+	bridge._retry_acknowledgements()
+	_check(native.acknowledges.size() == acks_before_disconnect + 2, "Reconexão tenta reconhecer compra novamente")
+	bridge._on_acknowledged({"response_code": 2, "purchase_token": "token-fake"})
+	_check(bridge._ack_retry_attempts.get("token-fake", 0) == 1, "Payload purchase_token permite agendar falha de reconhecimento")
+	bridge._retry_acknowledgements()
+	_check(native.acknowledges.size() == acks_before_disconnect + 3, "Falha com purchase_token realmente reexecuta acknowledge")
+	bridge._on_acknowledged({"response_code": 0, "purchase_token": "token-fake"})
+	_check(not bridge._acknowledging.has("token-fake") and not bridge._ack_retry_attempts.has("token-fake"), "Reconhecimento final remove apenas o token concluído")
 	# O serviço desconectado precisa reconectar sozinho e também quando o
 	# aplicativo retoma do segundo plano (refresh).
 	bridge._on_disconnected()

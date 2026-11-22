@@ -18,13 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Godot 4.7.2
-        uses: chickensoft-games/setup-godot@v2
+        uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2
         with:
           version: 4.7.2
           use-dotnet: false
+
+      - name: Validar SHA-512 e versão do Godot
+        run: bash .github/scripts/verify-godot.sh
 
       - name: Capturar telas dos estados Free e Pro no app único
         run: |
