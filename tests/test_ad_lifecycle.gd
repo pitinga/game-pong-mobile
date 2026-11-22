@@ -18,10 +18,15 @@ class FakeBilling:
 	signal availability_changed(available: bool)
 	signal purchase_message(message: String)
 	signal ad_verification_result(request_id: int, confirmed_free: bool)
+	signal entitlement_query_completed(query_id: int, owned: bool)
+	var query_sequence := 1
 	func start() -> void: pass
 	func purchase() -> void: pass
 	func refresh() -> void: pass
 	func verify_free_before_ad(request_id: int) -> void:
+		query_sequence += 1
+		entitlement_checked.emit(false)
+		entitlement_query_completed.emit(query_sequence, false)
 		ad_verification_result.emit(request_id, true)
 
 class DelayedInterstitial:
@@ -89,9 +94,11 @@ func _run() -> void:
 	game.pro_entitlement_file = purchase_file
 	root.add_child(game)
 	await process_frame
-	game._on_entitlement_checked(false)
+	var fake_billing := FakeBilling.new()
+	game.set_billing_adapter(fake_billing)
+	fake_billing.entitlement_checked.emit(false)
+	fake_billing.entitlement_query_completed.emit(1, false)
 	game.set_ad_consent_granted(true)
-	game.set_billing_adapter(FakeBilling.new())
 	var mock := DelayedInterstitial.new()
 	game.add_child(mock)
 	game.set_interstitial_adapter(mock)

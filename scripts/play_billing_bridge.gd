@@ -9,6 +9,8 @@ signal price_changed(formatted_price: String)
 signal purchase_pending(pending: bool)
 signal checkout_changed(in_progress: bool)
 signal ad_verification_result(request_id: int, confirmed_free: bool)
+signal entitlement_query_completed(query_id: int, owned: bool)
+signal entitlement_verification_failed
 
 const PRODUCT_ID := "pro_unlock"
 const RESPONSE_OK := 0
@@ -35,6 +37,7 @@ var _awaiting_initial_details := false
 var _pending_purchase := false
 var _checkout_in_progress := false
 var _query_active := false
+var _query_sequence := 0
 var _query_context: Dictionary = {}
 var _query_queue: Array[Dictionary] = []
 var _acknowledging: Dictionary = {}
@@ -158,6 +161,8 @@ func _dispatch_purchase_query() -> void:
 	if _query_active or _query_queue.is_empty() or _native == null or not _connected:
 		return
 	_query_context = _query_queue.pop_front()
+	_query_sequence += 1
+	_query_context["query_id"] = _query_sequence
 	_query_active = true
 	_native.call("queryPurchases", PRODUCT_INAPP, false)
 
@@ -222,6 +227,7 @@ func _on_connected() -> void:
 
 
 func _on_disconnected() -> void:
+	entitlement_verification_failed.emit()
 	# Falhar fechado: uma consulta interrompida nunca autoriza exibição.
 	var pending_ad := int(_query_context.get("ad_id", -1))
 	_query_context.clear()
@@ -304,6 +310,7 @@ func _on_product_details(response: Dictionary) -> void:
 
 func _on_purchases(response: Dictionary) -> void:
 	if int(response.get("response_code", -1)) != RESPONSE_OK:
+		entitlement_verification_failed.emit()
 		purchase_message.emit("Não foi possível restaurar compras agora. Tente novamente.")
 		_finish_purchase_query(false)
 		return
@@ -343,6 +350,11 @@ func _on_purchases(response: Dictionary) -> void:
 	_purchase_recheck_timer.stop()
 	_purchase_recheck_attempts = 0
 	entitlement_checked.emit(owned)
+	# A sinalização adicional só vale para uma consulta realmente enviada
+	# por este adaptador. Callbacks duplicados/sem solicitação ativa não
+	# contam como duas verificações independentes de ausência de Pro.
+	if _query_active:
+		entitlement_query_completed.emit(int(_query_context.get("query_id", 0)), owned)
 	if owned:
 		purchase_message.emit("Pro restaurado: anúncios desativados.")
 	elif bool(_query_context.get("manual_restore", false)):

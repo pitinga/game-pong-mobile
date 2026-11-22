@@ -14,6 +14,7 @@ const AD_POLICY_FILE := "user://pong_free_ad_policy.cfg"
 const PRO_ENTITLEMENT_FILE := "user://pong_pro_entitlement.cfg"
 const PRO_REVOKE_GRACE_SEC := 48 * 60 * 60
 const PRO_NEGATIVE_INTERVAL_SEC := 24 * 60 * 60
+const FREE_CONFIRMATIONS_FOR_ADS := 2
 # Adicionar URL da Play Store somente após o título estar publicado. Nunca
 # oferecer links de instalação para apps inexistentes ou para este próprio jogo.
 const RELEASED_GAME_CATALOG := []
@@ -90,6 +91,8 @@ var _negative_first_unix := 0
 var _negative_last_unix := 0
 var _negative_count := 0
 var _ads_consent_granted := false
+var _session_free_confirmations := 0
+var _last_free_query_id := 0
 var _pending_pro_preferences := false
 var _pending_pro_revocation := false
 var _interstitial_attempted_this_match := false
@@ -771,7 +774,7 @@ func _complete_match(won: bool) -> void:
 			push_warning("Não foi possível guardar o limite local de anúncios.")
 	_show_interface()
 	queue_redraw()
-	if _ads_allowed_now():
+	if _can_check_ads_after_match():
 		# Oportunidade exclusiva de transição: após o placar final aparecer.
 		call_deferred("_try_show_interstitial_after_match", _match_id)
 
@@ -786,7 +789,15 @@ func set_ad_consent_granted(granted: bool) -> void:
 
 
 func _ads_allowed_now() -> bool:
-	return entitlement_status == EntitlementStatus.FREE_CONFIRMED and not is_pro and _ads_consent_granted
+	return _can_check_ads_after_match() and _session_free_confirmations >= FREE_CONFIRMATIONS_FOR_ADS
+
+
+func _can_check_ads_after_match() -> bool:
+	# Uma primeira consulta negativa apenas habilita a rechecagem; não
+	# permite sequer pré-carregar anúncios. A segunda deve ser de outra
+	# solicitação real à Play, identificada por query_id na mesma sessão.
+	return entitlement_status == EntitlementStatus.FREE_CONFIRMED and not is_pro \
+			and _ads_consent_granted and _session_free_confirmations >= 1
 
 
 func _refresh_ads_allowed() -> void:
@@ -841,12 +852,13 @@ func set_interstitial_adapter(adapter: Node) -> void:
 
 func _try_show_interstitial_after_match(match_id: int = -1) -> void:
 	# Nunca iniciar anúncio durante a partida, em pausa ou no menu.
-	if not _ads_allowed_now() or state != GameState.FINISHED or _interstitial_attempted_this_match \
+	if not _can_check_ads_after_match() or state != GameState.FINISHED or _interstitial_attempted_this_match \
 			or _active_ad_request_id != -1 or (match_id >= 0 and match_id != _match_id):
 		return
 	if not is_instance_valid(_interstitial_adapter):
 		return
-	if not _interstitial_adapter.is_interstitial_loaded() or not _ad_policy.can_show(_ad_now_msec()):
+	if not _ad_policy.can_show(_ad_now_msec()) \
+			or (_ads_allowed_now() and not _interstitial_adapter.is_interstitial_loaded()):
 		return
 	# Falhar fechado: se a Play não responder a uma consulta NOVA e exclusiva,
 	# nenhum anúncio será solicitado, mesmo se o cache disser Free.
@@ -1043,12 +1055,19 @@ func set_billing_adapter(adapter: Node) -> void:
 	if _billing_adapter == adapter:
 		return
 	_on_ad_verification_timeout()
+	_session_free_confirmations = 0
+	_last_free_query_id = 0
+	if not is_pro:
+		entitlement_status = EntitlementStatus.UNKNOWN
+	_refresh_ads_allowed()
 	if is_instance_valid(_billing_adapter):
 		for connection in [
 			["entitlement_checked", Callable(self, "_on_entitlement_checked")],
 			["purchase_pending", Callable(self, "_on_purchase_pending")],
 			["checkout_changed", Callable(self, "_on_checkout_changed")],
 			["ad_verification_result", Callable(self, "_on_ad_verification_result")],
+			["entitlement_query_completed", Callable(self, "_on_entitlement_query_completed")],
+			["entitlement_verification_failed", Callable(self, "_on_entitlement_verification_failed")],
 			["availability_changed", Callable(self, "_on_billing_availability")],
 			["purchase_message", Callable(self, "_on_billing_message")],
 			["price_changed", Callable(self, "_on_pro_price_changed")],
@@ -1078,6 +1097,10 @@ func set_billing_adapter(adapter: Node) -> void:
 		adapter.checkout_changed.connect(_on_checkout_changed)
 	if adapter.has_signal("ad_verification_result"):
 		adapter.ad_verification_result.connect(_on_ad_verification_result)
+	if adapter.has_signal("entitlement_query_completed"):
+		adapter.entitlement_query_completed.connect(_on_entitlement_query_completed)
+	if adapter.has_signal("entitlement_verification_failed"):
+		adapter.entitlement_verification_failed.connect(_on_entitlement_verification_failed)
 	adapter.availability_changed.connect(_on_billing_availability)
 	adapter.purchase_message.connect(_on_billing_message)
 	if adapter.has_signal("price_changed"):
@@ -1104,6 +1127,8 @@ func _on_entitlement_checked(owned: bool) -> void:
 	var now := int(Time.get_unix_time_from_system())
 	if owned:
 		_on_ad_verification_timeout()
+		_session_free_confirmations = 0
+		_last_free_query_id = 0
 		_cached_pro_owned = true
 		_last_positive_unix = now
 		_negative_first_unix = 0
@@ -1138,6 +1163,30 @@ func _on_entitlement_checked(owned: bool) -> void:
 	_apply_pro_entitlement(false)
 
 
+func _on_entitlement_query_completed(query_id: int, owned: bool) -> void:
+	if owned or query_id <= _last_free_query_id:
+		return
+	_last_free_query_id = query_id
+	if entitlement_status != EntitlementStatus.FREE_CONFIRMED or is_pro:
+		return
+	_session_free_confirmations = mini(_session_free_confirmations + 1, FREE_CONFIRMATIONS_FOR_ADS)
+	_refresh_ads_allowed()
+
+
+func _on_entitlement_verification_failed() -> void:
+	# Qualquer falha/reconexão invalida o par de confirmações Free. Falhar
+	# fechado protege usuários que compraram Pro em outro dispositivo.
+	if is_pro:
+		return
+	_session_free_confirmations = 0
+	_last_free_query_id = 0
+	if entitlement_status == EntitlementStatus.FREE_CONFIRMED:
+		entitlement_status = EntitlementStatus.UNKNOWN
+	_on_ad_verification_timeout()
+	_refresh_ads_allowed()
+	_update_pro_ui()
+
+
 func _load_cached_pro_entitlement() -> void:
 	# Cache para evitar que os anúncios voltem durante uma queda da Play Store.
 	# Mesmo um cache Free NÃO autoriza anúncios: exige verificação nesta sessão.
@@ -1158,6 +1207,8 @@ func _on_purchase_pending(pending: bool) -> void:
 	# qualquer carga ou impressão publicitária até uma resposta definitiva.
 	if is_pro:
 		return
+	_session_free_confirmations = 0
+	_last_free_query_id = 0
 	if pending:
 		_on_ad_verification_timeout()
 	entitlement_status = EntitlementStatus.PENDING if pending else EntitlementStatus.UNKNOWN
@@ -1169,6 +1220,8 @@ func _on_purchase_pending(pending: bool) -> void:
 func _on_checkout_changed(in_progress: bool) -> void:
 	if is_pro:
 		return
+	_session_free_confirmations = 0
+	_last_free_query_id = 0
 	if in_progress:
 		_on_ad_verification_timeout()
 	entitlement_status = EntitlementStatus.CHECKOUT if in_progress else EntitlementStatus.UNKNOWN

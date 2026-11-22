@@ -13,7 +13,10 @@ class FakeBilling:
 	signal purchase_pending(pending: bool)
 	signal checkout_changed(in_progress: bool)
 	signal ad_verification_result(request_id: int, confirmed_free: bool)
+	signal entitlement_query_completed(query_id: int, owned: bool)
+	signal entitlement_verification_failed
 	var restores := 0
+	var query_sequence := 0
 
 	func start() -> void:
 		pass
@@ -25,7 +28,13 @@ class FakeBilling:
 		restores += 1
 
 	func verify_free_before_ad(request_id: int) -> void:
+		simulate_free_query()
 		ad_verification_result.emit(request_id, true)
+
+	func simulate_free_query() -> void:
+		query_sequence += 1
+		entitlement_checked.emit(false)
+		entitlement_query_completed.emit(query_sequence, false)
 
 
 class FakeNative:
@@ -135,9 +144,11 @@ func _run() -> void:
 	_check_no_ad(game, fake, "Pagamento pendente impede pré-carga e exibição")
 	billing.purchase_pending.emit(false)
 	_check(game.entitlement_status == GameScript.EntitlementStatus.UNKNOWN, "Após pendência, aguarda nova consulta antes de liberar anúncios")
-	billing.entitlement_checked.emit(false)
+	billing.simulate_free_query()
 	_check(game.entitlement_status == GameScript.EntitlementStatus.FREE_CONFIRMED \
-			and fake.ads_allowed and fake.preload_count == 1, "Somente confirmação Free da sessão libera o adaptador com consentimento")
+			and not fake.ads_allowed and fake.preload_count == 0, "Uma única negativa ainda não libera pré-carga, mesmo com consentimento")
+	billing.entitlement_query_completed.emit(billing.query_sequence, false)
+	_check(not fake.ads_allowed, "Callback duplicado da mesma consulta não conta como segunda confirmação")
 	for i in range(4):
 		game._start_match()
 		game._complete_match(true)
@@ -151,8 +162,16 @@ func _run() -> void:
 	_check(not fake.ads_allowed and game.entitlement_status == GameScript.EntitlementStatus.PENDING, "Pendência iniciada após Free confirmado suspende pré-carregamento")
 	billing.purchase_pending.emit(false)
 	_check(not fake.ads_allowed and game.entitlement_status == GameScript.EntitlementStatus.UNKNOWN, "Cancelar pendência exige nova confirmação Free")
-	billing.entitlement_checked.emit(false)
+	billing.simulate_free_query()
+	_check(not fake.ads_allowed, "Nova sessão de verificação após pendência exige duas negativas independentes")
+	billing.simulate_free_query()
 	_check(fake.ads_allowed and game.entitlement_status == GameScript.EntitlementStatus.FREE_CONFIRMED, "Nova consulta da Play reabilita Free com consentimento")
+	billing.entitlement_verification_failed.emit()
+	_check(game.entitlement_status == GameScript.EntitlementStatus.UNKNOWN and not fake.ads_allowed, "Falha da Play invalida todas as negativas e desativa pré-carga")
+	billing.simulate_free_query()
+	_check(not fake.ads_allowed, "Após falha, a primeira confirmação ainda é insuficiente")
+	billing.simulate_free_query()
+	_check(fake.ads_allowed, "Após falha, somente a segunda consulta independente reautoriza pré-carga")
 	game.set_ad_consent_granted(false)
 	_check(not fake.ads_allowed, "Retirada de consentimento bloqueia o adaptador imediatamente")
 	var preloads_before := fake.preload_count
@@ -213,7 +232,7 @@ func _run() -> void:
 	later._negative_last_unix = now - later.PRO_NEGATIVE_INTERVAL_SEC - 3600
 	later_billing.entitlement_checked.emit(false)
 	_check(not later.is_pro and later.entitlement_status == GameScript.EntitlementStatus.FREE_CONFIRMED \
-			and later_ads.ads_allowed, "Reembolso só revoga depois das duas negativas e 48h; volta a Free com consentimento")
+			and not later_ads.ads_allowed, "Reembolso após carência só libera publicidade depois de duas confirmações Free novas")
 	later._restore_purchase()
 	_check(later_billing.restores == 1, "Ação Restaurar continua disponível depois da revogação")
 	later.free()
@@ -223,11 +242,15 @@ func _run() -> void:
 	var no_consent_ads := _attach_ads(clean)
 	_check(clean.entitlement_status == GameScript.EntitlementStatus.UNKNOWN \
 			and not no_consent_ads.ads_allowed, "Cache Free da sessão anterior não confirma Free nesta sessão")
+	clean.set_ad_consent_granted(true)
+	_check(not no_consent_ads.ads_allowed, "Reinstalação/reabertura com cache Free nunca herda confirmações de anúncio")
 	var clean_billing := FakeBilling.new()
 	clean.set_billing_adapter(clean_billing)
-	clean_billing.entitlement_checked.emit(false)
+	clean_billing.simulate_free_query()
 	_check(clean.entitlement_status == GameScript.EntitlementStatus.FREE_CONFIRMED \
-			and not no_consent_ads.ads_allowed and no_consent_ads.preload_count == 0, "Confirmação Free sem consentimento não inicializa publicidade")
+			and not no_consent_ads.ads_allowed, "Cache Free + uma consulta nova não libera publicidade")
+	clean_billing.simulate_free_query()
+	_check(no_consent_ads.ads_allowed, "Após reinício, duas novas negativas independentes podem habilitar publicidade")
 	clean_billing.purchase_message.emit("Pro não encontrado nesta conta Google da Play Store. Se já comprou, selecione a conta usada na compra e toque em RESTAURAR; procure o suporte se persistir.")
 	_check((clean._menu.get_child(0) as PanelContainer).get_combined_minimum_size().y <= 530.0, "Orientação de conta Google também cabe no menu Free")
 	clean.free()

@@ -12,6 +12,7 @@ class FakeBilling:
 	signal purchase_pending(pending: bool)
 	signal checkout_changed(in_progress: bool)
 	signal ad_verification_result(request_id: int, confirmed_free: bool)
+	signal entitlement_query_completed(query_id: int, owned: bool)
 	var requests: Array[int] = []
 	var cancellations: Array[int] = []
 
@@ -98,6 +99,8 @@ func _run() -> void:
 	await process_frame
 	var billing := FakeBilling.new()
 	game.set_billing_adapter(billing)
+	billing.entitlement_checked.emit(false)
+	billing.entitlement_query_completed.emit(1, false)
 	var ad := _attach_ad(game)
 	_finish_eligible_match(game)
 	_check(billing.requests.size() == 1 and ad.shows == 0, "Fim de partida solicita revalidação antes de exibir anúncio")
@@ -111,6 +114,8 @@ func _run() -> void:
 	await process_frame
 	var timeout_billing := FakeBilling.new()
 	timeout_game.set_billing_adapter(timeout_billing)
+	timeout_billing.entitlement_checked.emit(false)
+	timeout_billing.entitlement_query_completed.emit(1, false)
 	var timeout_ad := _attach_ad(timeout_game)
 	_finish_eligible_match(timeout_game)
 	_check(timeout_ad.shows == 0 and timeout_billing.requests.size() == 1, "Sem resposta da Play não exibe anúncio")
@@ -130,6 +135,8 @@ func _run() -> void:
 	_check(timeout_ad.shows == 0, "Voltar ao menu impede anúncio de confirmação atrasada")
 	_finish_eligible_match(timeout_game)
 	var valid_id: int = timeout_billing.requests.back() if not timeout_billing.requests.is_empty() else -1
+	timeout_billing.entitlement_checked.emit(false)
+	timeout_billing.entitlement_query_completed.emit(2, false)
 	timeout_billing.ad_verification_result.emit(valid_id, true)
 	_check(timeout_ad.shows == 1 and timeout_game.state == GameScript.GameState.FINISHED, "Negativa fresca e válida permite apenas anúncio no fim de partida")
 	timeout_game._on_interstitial_closed(timeout_game._active_ad_request_id)
@@ -147,16 +154,19 @@ func _run() -> void:
 	bridge._native = native
 	bridge._connected = true
 	var results: Array[String] = []
+	var query_ids: Array[int] = []
 	bridge.ad_verification_result.connect(func(id: int, free: bool): results.append("%d:%s" % [id, str(free)]))
+	bridge.entitlement_query_completed.connect(func(id: int, _owned: bool): query_ids.append(id))
 	bridge.refresh()
 	bridge.verify_free_before_ad(42)
 	_check(native.queries == 1, "Consulta de anúncio aguarda consulta anterior sem misturar callbacks")
 	bridge._on_purchases({"response_code": 0, "purchases": []})
-	_check(native.queries == 2 and results.is_empty(), "Resposta antiga negativa não confirma verificação de anúncio")
+	_check(native.queries == 2 and results.is_empty() and query_ids == [1], "Primeira resposta negativa conta apenas para sua própria consulta")
 	bridge._on_purchases({"response_code": 0, "purchases": [{
 		"product_ids": ["pro_unlock"], "purchase_state": 1, "is_acknowledged": true
 	}]})
 	_check(results == ["42:false"], "Resposta correlacionada identifica compra Pro e recusa anúncio")
+	_check(query_ids == [1, 2], "Respostas nativas recebem IDs de consultas distintos e crescentes")
 	bridge.verify_free_before_ad(43)
 	bridge._on_purchases({"response_code": -1})
 	_check(results.back() == "43:false", "Erro nativo de verificação recusa anúncio")

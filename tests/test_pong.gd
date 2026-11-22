@@ -11,10 +11,15 @@ class FakeBilling:
 	signal availability_changed(available: bool)
 	signal purchase_message(message: String)
 	signal ad_verification_result(request_id: int, confirmed_free: bool)
+	signal entitlement_query_completed(query_id: int, owned: bool)
+	var query_sequence := 1
 	func start() -> void: pass
 	func purchase() -> void: pass
 	func refresh() -> void: pass
 	func verify_free_before_ad(request_id: int) -> void:
+		query_sequence += 1
+		entitlement_checked.emit(false)
+		entitlement_query_completed.emit(query_sequence, false)
 		ad_verification_result.emit(request_id, true)
 
 class FakeInterstitialAdapter:
@@ -317,14 +322,16 @@ func _run_tests() -> void:
 
 	# Integração de evento real de fim de partida com adaptador injetável.
 	# Não carrega SDK, faz solicitações à rede nem usa identificadores reais.
-	game._on_entitlement_checked(false)
+	var fake_billing := FakeBilling.new()
+	game.set_billing_adapter(fake_billing)
+	fake_billing.entitlement_checked.emit(false)
+	fake_billing.entitlement_query_completed.emit(1, false)
 	game.set_ad_consent_granted(true)
-	game.set_billing_adapter(FakeBilling.new())
 	var fake_ad := FakeInterstitialAdapter.new()
 	fake_ad.game = game
 	game.add_child(fake_ad)
 	game.set_interstitial_adapter(fake_ad)
-	_check(fake_ad.ads_allowed, "Adaptador só recebe autorização após Free confirmado e consentimento")
+	_check(not fake_ad.ads_allowed, "Mesmo após primeira confirmação Free e consentimento, não pré-carrega anúncios")
 	game._ad_policy = AdPolicy.new()
 	for match_number in range(3):
 		_finish_free_match(game)
