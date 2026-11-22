@@ -29,6 +29,7 @@ func _run() -> void:
 		game.stats_file = "user://pong_aspect_%s_stats.cfg" % token
 		root.add_child(game)
 		await process_frame
+		_check(game._sound_players.is_empty(), "Runner headless não inicia canais de áudio sem saída")
 		game._select_difficulty(1)
 		game._start_match()
 		game._serve_countdown = 0.0

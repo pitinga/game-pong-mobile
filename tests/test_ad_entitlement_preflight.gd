@@ -180,6 +180,7 @@ func _run() -> void:
 	bridge._on_purchases({"response_code": 0, "purchases": []})
 	_check(results.size() == 2, "Consulta já iniciada e cancelada descarta confirmação tardia")
 	bridge.free()
+	native.free()
 
 	var checkout := BillingBridge.new()
 	var checkout_native := FakeNative.new()
@@ -200,6 +201,7 @@ func _run() -> void:
 	}]})
 	_check(checkout._pending_purchase and checkout_entitlements.is_empty(), "Somente resposta nativa PENDING marca pagamento em análise")
 	checkout.free()
+	checkout_native.free()
 
 	var directory := DirAccess.open("user://")
 	if directory != null:
