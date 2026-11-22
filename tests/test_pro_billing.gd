@@ -1,0 +1,292 @@
+extends SceneTree
+## Compra permanente, restauração e migração Free/Pro (sem dinheiro nem SDK real).
+
+const GameScript = preload("res://scripts/pong.gd")
+const BillingBridge = preload("res://scripts/play_billing_bridge.gd")
+
+class FakeBilling:
+	extends Node
+	signal entitlement_checked(owned: bool)
+	signal availability_changed(available: bool)
+	signal purchase_message(message: String)
+	signal price_changed(formatted_price: String)
+	var starts := 0
+	var purchases := 0
+	var queries := 0
+
+	func start() -> void:
+		starts += 1
+
+	func purchase() -> void:
+		purchases += 1
+
+	func refresh() -> void:
+		queries += 1
+
+
+class FakeNative:
+	extends Node
+	var acknowledges: Array[String] = []
+	var launches := 0
+	var queries := 0
+	var connections := 0
+	var last_option_id := ""
+
+	func startConnection() -> void:
+		connections += 1
+
+	func queryProductDetails(_ids: PackedStringArray, _product_type: String) -> void:
+		pass
+
+	func endConnection() -> void:
+		pass
+
+	func acknowledgePurchase(token: String) -> void:
+		acknowledges.append(token)
+
+	func purchase(_product_id: String, option: String, _offer: String, _personalized: bool) -> Dictionary:
+		launches += 1
+		last_option_id = option
+		return {"response_code": 0}
+
+	func queryPurchases(_product_type: String, _include_suspended: bool) -> void:
+		queries += 1
+
+
+class FakeInterstitial:
+	extends Node
+	signal interstitial_opened(request_id: int)
+	signal interstitial_impression(request_id: int)
+	signal interstitial_closed(request_id: int)
+	signal interstitial_failed(request_id: int)
+
+	func is_interstitial_loaded() -> bool:
+		return true
+
+	func show_interstitial(_request_id: int) -> bool:
+		return true
+
+	func cancel_interstitial(_request_id: int) -> bool:
+		return true
+
+	func recover_interstitial(_request_id: int) -> bool:
+		return true
+
+
+var failures := 0
+
+
+func _initialize() -> void:
+	call_deferred("_run")
+
+
+func _check(ok: bool, label: String) -> void:
+	if ok:
+		print("OK  - " + label)
+	else:
+		failures += 1
+		push_error("FALHOU - " + label)
+
+
+func _run() -> void:
+	root.size = Vector2i(960, 540)
+	var token := "%d_%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var purchase_file := "user://pong_billing_test_%s.cfg" % token
+	var settings_file := "user://pong_billing_settings_%s.cfg" % token
+	var stats_file := "user://pong_billing_stats_%s.cfg" % token
+	var ads_file := "user://pong_billing_ads_%s.cfg" % token
+	var game: Control = load("res://scenes/main.tscn").instantiate()
+	game.pro_entitlement_file = purchase_file
+	game.settings_file = settings_file
+	game.stats_file = stats_file
+	game.ad_policy_file = ads_file
+	root.add_child(game)
+	await process_frame
+	_check(not game.is_pro and game._pro_button.visible and game._pro_button.disabled, "App único começa Free sem plugin nem compra fictícia")
+	_check(game._other_games_button.disabled, "Menu não oferece link de instalação inexistente")
+	var fake := FakeBilling.new()
+	game.set_billing_adapter(fake)
+	_check(fake.starts == 1 and game._restore_purchase_button.disabled == false, "Adaptador conectado habilita consulta de restauração")
+	game._buy_pro()
+	_check(fake.purchases == 0 and not game.is_pro, "Compra indisponível não é simulada como concluída")
+	fake.availability_changed.emit(true)
+	fake.price_changed.emit("R$ 4,99")
+	_check("R$ 4,99" in game._pro_button.text, "Menu exibe preço localizado antes da abertura da Play Store")
+	_check((game._menu.get_child(0) as PanelContainer).get_combined_minimum_size().y <= 530.0, "Menu Free completo com preço cabe em 530 px")
+	game._buy_pro()
+	_check(fake.purchases == 1 and not game.is_pro, "Tocar em comprar apenas abre fluxo externo: não libera Pro")
+	fake.purchase_message.emit("Compra pendente")
+	_check(not game.is_pro and game._pro_status_label.text == "Compra pendente", "Compra pendente mantém recursos bloqueados")
+	game._restore_purchase()
+	_check(fake.queries == 1, "Restaurar consulta compras no adaptador")
+	fake.entitlement_checked.emit(true)
+	_check(game.is_pro and game._pro_row.visible and not game._pro_button.visible, "Confirmação da Play libera os modos Pro sem outro app")
+	_check(game._restore_purchase_button.visible == false, "Compra já confirmada não é oferecida novamente")
+	var saved := ConfigFile.new()
+	_check(saved.load(purchase_file) == OK and saved.get_value("purchase", "pro_owned", false), "Titularidade confirmada persiste para atualização/offline")
+	game._open_settings()
+	game._set_ball_size(130.0)
+	game._set_mode(1)
+	game._return_to_menu()
+	game.free()
+
+	var reopened: Control = load("res://scenes/main.tscn").instantiate()
+	reopened.pro_entitlement_file = purchase_file
+	reopened.settings_file = settings_file
+	reopened.stats_file = stats_file
+	reopened.ad_policy_file = ads_file
+	# No Android, este load é executado automaticamente em _ready().
+	reopened._load_cached_pro_entitlement()
+	root.add_child(reopened)
+	await process_frame
+	_check(reopened.is_pro and is_equal_approx(reopened.ball_scale, 1.3) and reopened.match_mode == GameScript.MatchMode.SURVIVAL, "Reabertura preserva compra e configurações Pro")
+	var offline_fake := FakeBilling.new()
+	reopened.set_billing_adapter(offline_fake)
+	offline_fake.purchase_message.emit("Sem conexão")
+	_check(reopened.is_pro, "Falha de rede não remove compra confirmada nem faz anúncios voltarem")
+	offline_fake.entitlement_checked.emit(false)
+	_check(not reopened.is_pro and reopened.match_mode == GameScript.MatchMode.CLASSIC and is_equal_approx(reopened.ball_scale, 1.0), "Consulta Play válida sem titularidade revoga recursos e volta a regras Free")
+	saved = ConfigFile.new()
+	_check(saved.load(purchase_file) == OK and not saved.get_value("purchase", "pro_owned", true), "Revogação confirmada também atualiza cache")
+	# A mesma conta pode recuperar depois da reinstalação sem nova compra.
+	offline_fake.entitlement_checked.emit(true)
+	_check(reopened.is_pro and offline_fake.purchases == 0, "Restaurar na Play desbloqueia Pro sem gerar cobrança")
+	# Revogar depois da confirmação não pode trocar 2 jogadores por CPU no meio do rally.
+	reopened._set_mode(GameScript.MatchMode.TWO_PLAYERS)
+	reopened._set_ball_size(150.0)
+	reopened._start_match()
+	offline_fake.entitlement_checked.emit(false)
+	_check(reopened.is_pro and reopened._pending_pro_revocation and reopened.match_mode == GameScript.MatchMode.TWO_PLAYERS and is_equal_approx(reopened.ball_scale, 1.5), "Revogação em partida local mantém modo e geometria até o fim")
+	reopened._return_to_menu()
+	_check(not reopened.is_pro and not reopened._pending_pro_revocation and reopened.match_mode == GameScript.MatchMode.CLASSIC and is_equal_approx(reopened.ball_scale, 1.0), "Ao retornar ao menu, revogação bloqueia Pro e volta ao padrão Free")
+	# Mesmo reiniciando uma partida em andamento, a próxima já segue o novo direito.
+	offline_fake.entitlement_checked.emit(true)
+	reopened._start_match()
+	offline_fake.entitlement_checked.emit(false)
+	reopened._start_match()
+	_check(not reopened.is_pro and reopened.match_mode == GameScript.MatchMode.CLASSIC and reopened.state == GameScript.GameState.PLAYING, "Reiniciar partida aplica revogação antes de criar a próxima")
+	reopened._return_to_menu()
+	# Uma confirmação pode chegar depois que um jogo Free já começou.
+	# Aplicar o direito de não ver anúncios imediatamente é seguro; mudar
+	# geometria e modo no meio do rally não é.
+	offline_fake.entitlement_checked.emit(false)
+	reopened._start_match()
+	offline_fake.entitlement_checked.emit(true)
+	_check(reopened.is_pro and is_equal_approx(reopened.ball_scale, 1.0) and reopened._pending_pro_preferences, "Compra restaurada no meio do jogo não teletransporta raquetes")
+	reopened._return_to_menu()
+	_check(is_equal_approx(reopened.ball_scale, 1.5) and reopened.match_mode == GameScript.MatchMode.TWO_PLAYERS and not reopened._pending_pro_preferences, "Preferências Pro mais recentes entram em vigor ao voltar ao menu")
+	var ads_before: int = reopened._ad_policy.matches_since_ad
+	reopened._start_match()
+	reopened._complete_match(true)
+	_check(reopened._ad_policy.matches_since_ad == ads_before, "Partida Pro não concede crédito para anúncios gratuitos")
+	reopened._return_to_menu()
+	reopened.set_published_games([
+		{"name": "Pong", "play_url": "https://play.google.com/store/apps/details?id=com.pitinga.pongmobile"},
+		{"name": "Site não autorizado", "play_url": "https://example.com/game"},
+		{"name": "2048", "play_url": "https://play.google.com/store/apps/details?id=com.pitinga.game2048"},
+	])
+	_check(reopened.published_games.size() == 1 and not reopened._other_games_button.disabled, "Catálogo mostra apenas outros jogos com URL oficial publicada")
+	reopened._open_other_games()
+	_check(reopened.state == GameScript.GameState.OTHER_GAMES and reopened._other_games_content.get_child_count() == 1, "Menu abre lista de instalação dos demais jogos")
+	reopened._return_to_menu()
+	_check(reopened.state == GameScript.GameState.MENU, "Lista de jogos volta ao menu")
+	var mock_ad := FakeInterstitial.new()
+	reopened.add_child(mock_ad)
+	reopened.set_interstitial_adapter(mock_ad)
+	_check(reopened._interstitial_adapter == mock_ad, "Adaptador permanece conectado com Pro, sem solicitar anúncios")
+	# O adaptador pode terminar um anúncio quando a Play confirmar e depois
+	# revogar a titularidade; nunca deixar o pedido assíncrono sem registro.
+	offline_fake.entitlement_checked.emit(false)
+	reopened._ad_requests[99] = {"impressed": false, "canceled": false, "failed": false}
+	reopened._active_ad_request_id = 99
+	offline_fake.entitlement_checked.emit(true)
+	offline_fake.entitlement_checked.emit(false)
+	_check(reopened.is_pro and reopened._pending_pro_revocation and reopened._active_ad_request_id == 99, "Revogação não interrompe anúncio iniciado nem altera o direito até encerrá-lo")
+	var impressions_before: int = reopened._ad_policy._impressions_msec.size()
+	reopened._on_interstitial_impression(99)
+	_check(reopened._ad_policy._impressions_msec.size() == impressions_before + 1, "Impressão legítima já iniciada continua contabilizada durante Pro")
+	reopened._on_interstitial_closed(99)
+	_check(not reopened.is_pro and not reopened._pending_pro_revocation and reopened._active_ad_request_id == -1, "Fim do anúncio permite aplicar revogação pendente com segurança")
+	_check(reopened._interstitial_adapter == mock_ad, "Após revogação, Free reutiliza o adaptador sem reiniciar o aplicativo")
+	reopened.free()
+
+	var bridge := BillingBridge.new()
+	var native := FakeNative.new()
+	bridge._native = native
+	bridge._connected = true
+	bridge.purchase()
+	_check(native.launches == 0, "Sem detalhes válidos do produto a Play não recebe tentativa de pagamento")
+	bridge._on_product_details({"response_code": 0, "product_details": [{"product_id": "outro_item"}]})
+	_check(not bridge._product_available, "Outro produto da loja não habilita compra Pro")
+	bridge._on_product_details({"response_code": 0, "product_details": [{"product_id": "pro_unlock", "one_time_purchase_offer_details_list": [{"offer_id": "", "purchase_option_id": "base", "formatted_price": "R$ 4,99"}]}]})
+	bridge.purchase()
+	_check(native.launches == 1 and native.last_option_id == "base" and bridge._price == "R$ 4,99", "Compra usa opção e preço localizados retornados pelo Google Play")
+	var bought := {"product_ids": PackedStringArray(["pro_unlock"]), "purchase_state": 1,
+		"purchase_token": "token-fake", "is_acknowledged": false}
+	var delivered: Array[bool] = []
+	bridge.entitlement_checked.connect(func(owned: bool): delivered.append(owned))
+	bridge._on_purchase_updated({"response_code": 1})
+	_check(delivered.is_empty(), "Cancelamento da compra não libera Pro")
+	bridge._on_purchase_updated({"response_code": 0, "purchases": [{"product_ids": ["outro_item"], "purchase_state": 1}]})
+	_check(delivered.is_empty(), "Callback de produto diferente não libera Pro")
+	bridge._on_purchases({"response_code": 0, "purchases": [{"product_ids": ["pro_unlock"], "purchase_state": 2}]})
+	_check(delivered.is_empty(), "Compra pendente não concede nem remove Pro")
+	bridge._on_purchase_updated({"response_code": 0, "purchases": [bought]})
+	_check(delivered.size() == 1 and delivered[0] and native.acknowledges == ["token-fake"] and native.queries == 1, "Compra concluída desbloqueia, reconhece sem consumo e consulta a Play")
+	bridge._on_purchase_updated({"response_code": 0, "purchases": [bought]})
+	_check(native.acknowledges.size() == 1, "Callback duplicado não reconhece o mesmo token duas vezes")
+	bridge._on_acknowledged({"response_code": 2, "token": "token-fake"})
+	bridge._retry_acknowledgements()
+	_check(native.acknowledges.size() == 2 and native.acknowledges.back() == "token-fake", "Falha de acknowledge agenda nova tentativa do mesmo token")
+	bridge._on_acknowledged({"response_code": 0, "token": "token-fake"})
+	_check(bridge._ack_retry_attempts.is_empty(), "Confirmação nativa limpa fila de reconhecimento")
+	bridge._on_purchases({"response_code": -1})
+	_check(delivered.size() == 2 and delivered.back(), "Erro da Play não revoga compra em cache")
+	bridge._on_purchases({"response_code": 0, "purchases": []})
+	_check(delivered.size() == 2, "Consulta antiga sem compra não desfaz desbloqueio recém-confirmado")
+	bridge._on_purchases({"response_code": 0, "purchases": []})
+	_check(delivered.size() == 2, "Segunda resposta vazia dentro do prazo não revoga Pro recém-pago")
+	bridge._recent_purchase_deadline_msec = Time.get_ticks_msec() - 1
+	bridge._on_purchases({"response_code": 0, "purchases": []})
+	_check(delivered.size() == 3 and not delivered.back(), "Após prazo de sincronização, consulta válida sem produto permite revogação")
+	bridge._on_purchases({"response_code": 0, "purchases": [bought]})
+	bridge._on_purchases({"response_code": 0, "purchases": []})
+	_check(delivered.size() == 5 and not delivered.back(), "Após compra confirmada por consulta, reembolso posterior revoga sem carência")
+	# O serviço desconectado precisa reconectar sozinho e também quando o
+	# aplicativo retoma do segundo plano (refresh).
+	bridge._on_disconnected()
+	_check(bridge._connection_retry_attempts == 1 and not bridge._connected, "Desconexão prepara retry exponencial")
+	bridge._retry_connection()
+	_check(native.connections == 1, "Retry realmente chama startConnection no plugin")
+	bridge._on_connect_error(2, "transient")
+	_check(bridge._connection_retry_attempts == 2, "Erro de conexão aumenta recuo sem repetir callbacks em loop")
+	bridge.refresh()
+	_check(native.connections == 2 and bridge._connection_retry_attempts == 0, "Restaurar/retomar reconecta manualmente mesmo desconectado")
+	bridge.refresh()
+	_check(native.connections == 2, "Refresh repetido durante conexão não chama startConnection novamente")
+	var queries_before: int = native.queries
+	bridge._on_connected()
+	_check(native.queries == queries_before and bridge._awaiting_initial_details, "Conexão consulta detalhes do produto antes de consultar compras")
+	bridge._on_product_details({"response_code": 2})
+	_check(native.queries == queries_before + 1 and not bridge._awaiting_initial_details, "Erro ao obter preço não impede restauração de compra")
+	bridge._on_connected()
+	queries_before = native.queries
+	bridge._restore_after_product_details()
+	_check(native.queries == queries_before + 1 and not bridge._awaiting_initial_details, "Watchdog permite restaurar compra se detalhes não responderem")
+	bridge._on_product_details({"response_code": 2})
+	_check(native.queries == queries_before + 1, "Resposta atrasada de detalhes não duplica consulta de compras")
+	bridge._on_disconnected()
+	bridge._retry_connection()
+	var reconnects_before: int = native.connections
+	bridge._on_connect_timeout()
+	_check(native.connections == reconnects_before and not bridge._connecting and bridge._connection_retry_attempts == 2, "Conexão sem callback libera estado e programa retry limitado")
+	bridge._native = null
+	bridge.free()
+	native.free()
+	for path in [purchase_file, settings_file, stats_file, ads_file]:
+		for suffix in ["", ".bak", ".tmp"]:
+			var candidate: String = path + suffix
+			if FileAccess.file_exists(candidate):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(candidate))
+	print("Pro / Billing unificados: %d falha(s)." % failures)
+	quit(1 if failures else 0)

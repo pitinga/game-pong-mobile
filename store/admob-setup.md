@@ -1,18 +1,18 @@
-# Preparação da publicidade — Pong Mobile Free
+# Preparação da publicidade — Pong Mobile (app único)
 
 ## Estado atual
 
 - A lógica de oportunidade de intersticiais **está implementada e testada** em `scripts/ad_policy.gd`: a cada 4 partidas concluídas, mínimo de 10 minutos e máximo de **6 impressões na janela móvel de 60 minutos**.
 - `scripts/pong.gd` oferece intersticial apenas **depois que a partida terminou e a tela final apareceu**, uma tentativa por partida. Não dispara anúncios durante a partida, pausa, primeira partida ou menu. Enquanto a apresentação aceita estiver pendente, os botões de próxima partida/menu ficam indisponíveis até confirmação de fechamento, falha, cancelamento ou recuperação nativa segura. Depois de uma espera excessiva, o jogador pode **fechar o app**, mas não iniciar gameplay atrás de um anúncio desconhecido.
-- O contador e os horários das impressões usam **milissegundos Unix** e persistem localmente em `user://pong_free_ad_policy.cfg`, inclusive entre reinicializações. A Free já guarda apenas a contagem de partidas enquanto o SDK não estiver instalado.
-- **Ainda não existe integração do SDK nativo AdMob**. A Free não exibe anúncios nem utiliza identificador de publicidade nesta versão. O app pode continuar funcionando offline.
-- A edição Pro **não deve conter** SDK, permissões ou inicialização de anúncios. O pacote Android Pro e o preset são distintos.
+- O contador e os horários das impressões usam **milissegundos Unix** e persistem localmente em `user://pong_free_ad_policy.cfg`, inclusive entre reinicializações. O modo gratuito guarda a contagem de partidas enquanto o SDK não estiver instalado.
+- **Ainda não existe integração do SDK nativo AdMob**. A modalidade gratuita não exibe anúncios nem utiliza identificador de publicidade nesta versão. O app pode continuar funcionando offline.
+- **Não há segundo pacote Pro.** A compra interna `pro_unlock` é consultada no mesmo aplicativo por Google Play Billing. Quando o direito Pro está ativo, não solicitar nem exibir publicidade.
 
 ## Para habilitar anúncios antes do lançamento monetizado
 
 1. Criar/validar a conta no [AdMob](https://admob.google.com), registrar `com.pitinga.pongmobile` e configurar um bloco de anúncio do tipo **intersticial**.
 2. Utilizar o [Godot AdMob Plugin da Poing Studios](https://github.com/poingstudios/godot-admob-plugin) na versão compatível com Godot 4.7.2, seguindo as instruções de Gradle e Android. O Google lista essa biblioteca de terceiros para integração com Godot; ela não é mantida pela equipe AdMob.
-3. Configurar o App ID nativo no Android Manifest somente do build Free, o identificador da unidade de intersticial e o [consentimento UMP](https://developers.google.com/admob/android/next-gen/privacy) quando aplicável.
+3. Configurar o App ID nativo no Android Manifest do aplicativo único, o identificador da unidade de intersticial e o [consentimento UMP](https://developers.google.com/admob/android/next-gen/privacy) quando aplicável; bloquear a inicialização de anúncios para titulares Pro.
 4. Durante testes, utilizar **somente IDs oficiais de teste** (por exemplo, unidade intersticial Android `ca-app-pub-3940256099942544/1033173712`); nunca clicar em anúncios de produção para testar.
 5. Implementar um `Node` adaptador do plugin (apenas Free) com o contrato GDScript abaixo, após concluir inicialização, consentimento e pré-carregamento:
    - `is_interstitial_loaded() -> bool`: só retorna `true` quando há intersticial pronto.
@@ -23,11 +23,11 @@
    - `signal interstitial_impression(request_id: int)`: emitir no callback nativo **`onAdImpression`**. O jogo persiste essa impressão **uma única vez por ID**, mesmo se o callback chegar tarde. Não registrar no simples pedido de exibição.
    - `signal interstitial_closed(request_id: int)`: emitir ao fechar o anúncio, liberando os botões de partida/menu.
    - `signal interstitial_failed(request_id: int)`: emitir se a apresentação falhar, também liberando os botões sem consumir o crédito.
-   - Registrar via `game.set_interstitial_adapter(adapter)` somente na Free. Trocar o adaptador durante uma solicitação exige cancelamento seguro; sem adaptador, não há anúncios. Exemplos de fake: `tests/test_pong.gd` e `tests/test_ad_lifecycle.gd`.
+   - Registrar via `game.set_interstitial_adapter(adapter)` somente quando Pro não estiver ativo. Trocar o adaptador durante uma solicitação exige cancelamento seguro; sem adaptador, não há anúncios. Exemplos de fake: `tests/test_pong.gd` e `tests/test_ad_lifecycle.gd`.
 6. Configurar limite adicional de **6 impressões por hora** no [painel do AdMob](https://support.google.com/admob/answer/6244508) e bloquear categorias inapropriadas para o público esperado.
    - Os limites salvos no dispositivo protegem contra reiniciar o aplicativo para zerar a contagem, mas **não são antifraude**: o relógio pode ser alterado pelo usuário. O limite configurado na rede continua sendo necessário.
-7. Atualizar a política de privacidade Free e o formulário **Segurança dos dados** da Play Store de acordo com as informações coletadas pelo SDK, incluindo consentimento exigido nos países aplicáveis.
-8. Validar o AAB Free assinado com IDs reais e o AAB Pro completamente livre do SDK de anúncios antes de enviar à loja.
+7. Atualizar a política de privacidade do aplicativo único e o formulário **Segurança dos dados** da Play Store de acordo com as informações coletadas pelo SDK, incluindo consentimento exigido nos países aplicáveis.
+8. Validar no **mesmo AAB** os dois estados: sem compra (publicidade elegível) e Pro confirmado (sem anúncios), inclusive após atualização/reinstalação.
 
 ## Regra de experiência do jogador
 

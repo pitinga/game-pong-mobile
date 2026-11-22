@@ -1,15 +1,19 @@
 extends Control
 ## Pong Mobile: jogo 2D em uma única cena, sem dependências externas.
 
-enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY, SETTINGS, STATS }
+enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY, SETTINGS, STATS, OTHER_GAMES }
 enum MatchMode { CLASSIC, SURVIVAL, TWO_PLAYERS }
 enum InterstitialState { IDLE, REQUESTED, SHOWING }
 
 const AdPolicy = preload("res://scripts/ad_policy.gd")
-const PRO_STORE_URL := "https://play.google.com/store/apps/details?id=com.pitinga.pongmobile.pro"
+const PlayBillingBridge = preload("res://scripts/play_billing_bridge.gd")
 const SETTINGS_FILE := "user://pong_pro_settings.cfg"
 const STATS_FILE := "user://pong_pro_stats.cfg"
 const AD_POLICY_FILE := "user://pong_free_ad_policy.cfg"
+const PRO_ENTITLEMENT_FILE := "user://pong_pro_entitlement.cfg"
+# Adicionar URL da Play Store somente após o título estar publicado. Nunca
+# oferecer links de instalação para apps inexistentes ou para este próprio jogo.
+const RELEASED_GAME_CATALOG := []
 const AD_REQUEST_TIMEOUT_MSEC := 8000
 const AD_SHOWING_TIMEOUT_MSEC := 120000
 const AD_RECOVERY_RETRY_MSEC := 4000
@@ -46,11 +50,13 @@ const THEMES := [
 	{"name": "VERDE", "player": Color("#8fea5b"), "cpu": Color("#8fea5b"), "ball": Color("#d9ff68")},
 ]
 
-var is_pro := OS.has_feature("pong_pro")
+var is_pro := false
 # Caminhos substituiveis nos testes: nunca gravar nas preferencias reais.
 var settings_file := SETTINGS_FILE
 var stats_file := STATS_FILE
 var ad_policy_file := AD_POLICY_FILE
+var pro_entitlement_file := PRO_ENTITLEMENT_FILE
+var published_games: Array[Dictionary] = []
 var match_mode: MatchMode = MatchMode.CLASSIC
 var point_limit := WIN_SCORE
 var ball_scale := 1.0
@@ -69,6 +75,12 @@ var _ad_policy = AdPolicy.new()
 # O SDK será conectado por um adaptador apenas na edição Free. Sem adaptador,
 # nenhum anúncio é solicitado ou exibido.
 var _interstitial_adapter: Node
+var _billing_adapter: Node
+var _billing_purchase_available := false
+var _billing_status := "Compras disponíveis quando o Google Play estiver configurado."
+var _pro_price := ""
+var _pending_pro_preferences := false
+var _pending_pro_revocation := false
 var _interstitial_attempted_this_match := false
 var _interstitial_state: InterstitialState = InterstitialState.IDLE
 var _ad_request_sequence := 0
@@ -107,6 +119,8 @@ var _finish_menu: CenterContainer
 var _privacy_menu: CenterContainer
 var _settings_menu: CenterContainer
 var _stats_menu: CenterContainer
+var _other_games_menu: CenterContainer
+var _other_games_content: VBoxContainer
 var _finish_title: Label
 var _finish_score: Label
 var _finish_again_button: Button
@@ -123,22 +137,35 @@ var _points_selector: OptionButton
 var _theme_selector: OptionButton
 var _stats_text: Label
 var _pro_button: Button
+var _restore_purchase_button: Button
+var _pro_row: HBoxContainer
+var _pro_status_label: Label
+var _edition_title: Label
+var _edition_subtitle: Label
+var _features_label: Label
+var _privacy_edition_label: Label
+var _privacy_storage_label: Label
+var _other_games_button: Button
 var _difficulty_buttons: Array[Button] = []
 var _sound_players := {}
 
 
 func _ready() -> void:
+	if OS.get_name() == "Android":
+		_load_cached_pro_entitlement()
+	_ad_policy.load_state(ad_policy_file)
 	if is_pro:
 		_load_pro_settings()
 		_load_pro_stats()
-	else:
-		_ad_policy.load_state(ad_policy_file)
 	_build_sounds()
 	_build_interface()
+	set_published_games(RELEASED_GAME_CATALOG)
 	_reset_positions()
 	_show_interface()
 	resized.connect(_on_resized)
 	queue_redraw()
+	if OS.get_name() == "Android":
+		set_billing_adapter(PlayBillingBridge.new())
 
 
 func _process(_delta: float) -> void:
@@ -371,7 +398,7 @@ func _input(event: InputEvent) -> void:
 			if state == GameState.PLAYING or state == GameState.PAUSED:
 				_toggle_pause()
 				get_viewport().set_input_as_handled()
-			elif state in [GameState.PRIVACY, GameState.SETTINGS, GameState.STATS]:
+			elif state in [GameState.PRIVACY, GameState.SETTINGS, GameState.STATS, GameState.OTHER_GAMES]:
 				_return_to_menu()
 				get_viewport().set_input_as_handled()
 			return
@@ -445,6 +472,8 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED and _active_ad_request_id != -1:
 		_ad_next_recovery_attempt_ticks = 0
 		_process(0.0)
+	if what == NOTIFICATION_APPLICATION_RESUMED and is_instance_valid(_billing_adapter):
+		_billing_adapter.refresh()
 	if what in [NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT] and state == GameState.PLAYING:
 		state = GameState.PAUSED
 		_clear_touch_captures()
@@ -527,6 +556,9 @@ func _start_match() -> void:
 	if _active_ad_request_id != -1:
 		return
 	_break_streak_on_abandon()
+	# Uma revogação recebida durante a partida anterior só entra na
+	# próxima partida; não mudar regras/raquetes em pleno rally.
+	_settle_pro_transition(true)
 	_match_id += 1
 	_clear_touch_captures()
 	_interstitial_attempted_this_match = false
@@ -730,9 +762,8 @@ func set_interstitial_adapter(adapter: Node) -> void:
 	## show_interstitial(id) -> bool, cancel_interstitial(id) -> bool,
 	## recover_interstitial(id) -> bool [garantia nativa terminal],
 	## sinais interstitial_opened/impression/closed/failed(id).
-	## Só conectar ao terminar o SDK/consentimento; a Pro ignora o adaptador.
-	if is_pro:
-		return
+	## Só conectar ao terminar o SDK/consentimento. Com Pro ativo,
+	## não solicitar anúncios, mas conservar o adaptador para reembolso.
 	if _active_ad_request_id != -1:
 		if is_instance_valid(_interstitial_adapter) and not _interstitial_adapter.cancel_interstitial(_active_ad_request_id):
 			push_warning("Não é seguro substituir o adaptador durante uma exibição pendente.")
@@ -804,7 +835,7 @@ func _on_interstitial_opened(request_id: int) -> void:
 func _on_interstitial_impression(request_id: int) -> void:
 	# Aceita impressão de uma solicitação real mesmo após close/navegação;
 	# ID impede que callback antigo seja atribuído a outra tentativa.
-	if is_pro or not _ad_requests.has(request_id):
+	if not _ad_requests.has(request_id):
 		return
 	var record: Dictionary = _ad_requests[request_id]
 	if record["impressed"] or record["canceled"] or record["failed"]:
@@ -849,6 +880,8 @@ func _finish_ad_request(request_id: int) -> void:
 	_ad_recovery_needed = false
 	_ad_next_recovery_attempt_ticks = 0
 	_set_ad_buttons_busy(false)
+	if _pending_pro_revocation and state not in [GameState.PLAYING, GameState.PAUSED]:
+		_settle_pro_transition()
 
 
 func _set_ad_buttons_busy(busy: bool) -> void:
@@ -895,6 +928,7 @@ func _return_to_menu() -> void:
 	_break_streak_on_abandon()
 	_clear_touch_captures()
 	state = GameState.MENU
+	_settle_pro_transition()
 	player_score = 0
 	cpu_score = 0
 	_reset_positions()
@@ -923,11 +957,210 @@ func _open_stats() -> void:
 	_show_interface()
 
 
-func _open_pro_store() -> void:
-	if OS.has_feature("pong_pro_store_live") and OS.get_name() == "Android":
-		OS.shell_open(PRO_STORE_URL)
-	else:
-		_pro_button.text = "PONG PRO — EM BREVE NA PLAY STORE"
+func set_billing_adapter(adapter: Node) -> void:
+	## Adaptador injetável: sinais entitlement_checked(bool),
+	## availability_changed(bool), purchase_message(String);
+	## métodos start(), purchase() e refresh().
+	if _billing_adapter == adapter:
+		return
+	if is_instance_valid(_billing_adapter):
+		for connection in [
+			["entitlement_checked", Callable(self, "_on_entitlement_checked")],
+			["availability_changed", Callable(self, "_on_billing_availability")],
+			["purchase_message", Callable(self, "_on_billing_message")],
+			["price_changed", Callable(self, "_on_pro_price_changed")],
+		]:
+			if _billing_adapter.has_signal(connection[0]) and _billing_adapter.is_connected(connection[0], connection[1]):
+				_billing_adapter.disconnect(connection[0], connection[1])
+		if _billing_adapter.get_parent() == self:
+			_billing_adapter.queue_free()
+	_billing_adapter = null
+	_billing_purchase_available = false
+	_pro_price = ""
+	if adapter == null:
+		_update_pro_ui()
+		return
+	if not adapter.has_signal("entitlement_checked") or not adapter.has_signal("availability_changed") \
+			or not adapter.has_signal("purchase_message") or not adapter.has_method("start") \
+			or not adapter.has_method("purchase") or not adapter.has_method("refresh"):
+		push_warning("Adaptador de compras inválido. A compra Pro não estará disponível.")
+		return
+	_billing_adapter = adapter
+	if adapter.get_parent() == null:
+		add_child(adapter)
+	adapter.entitlement_checked.connect(_on_entitlement_checked)
+	adapter.availability_changed.connect(_on_billing_availability)
+	adapter.purchase_message.connect(_on_billing_message)
+	if adapter.has_signal("price_changed"):
+		adapter.price_changed.connect(_on_pro_price_changed)
+	_update_pro_ui()
+	adapter.start()
+
+
+func _on_entitlement_checked(owned: bool) -> void:
+	# Somente um retorno bem-sucedido da Play Store substitui o último estado
+	# confirmado. Falha de rede não remove uma compra legítima.
+	var config := ConfigFile.new()
+	config.set_value("purchase", "pro_owned", owned)
+	if _save_config_with_backup(config, pro_entitlement_file) != OK:
+		push_warning("Não foi possível armazenar a última confirmação Pro.")
+	_apply_pro_entitlement(owned)
+
+
+func _load_cached_pro_entitlement() -> void:
+	# Cache para evitar que os anúncios voltem durante uma queda da Play Store.
+	# A consulta remota prevalece quando houver resposta bem-sucedida.
+	var config := _load_config_with_backup(pro_entitlement_file)
+	if config != null:
+		is_pro = bool(config.get_value("purchase", "pro_owned", false))
+
+
+func _apply_pro_entitlement(owned: bool, settle_between_matches: bool = false) -> void:
+	if owned:
+		_pending_pro_revocation = false
+	elif is_pro and ((state in [GameState.PLAYING, GameState.PAUSED] and not settle_between_matches) or _active_ad_request_id != -1):
+		# A titularidade já foi persistida como revogada. A experiência
+		# iniciada permanece íntegra até o menu/fechamento do anúncio.
+		_pending_pro_revocation = true
+		_pending_pro_preferences = false
+		_billing_status = "Pro não confirmado; a partida atual será preservada."
+		_update_pro_ui()
+		return
+	if is_pro != owned:
+		is_pro = owned
+		if owned:
+			if state in [GameState.PLAYING, GameState.PAUSED]:
+				# A restauração assíncrona não muda o tamanho das raquetes
+				# nem as regras no meio de um rally.
+				_pending_pro_preferences = true
+			else:
+				_load_pro_settings()
+				_load_pro_stats()
+				_sync_pro_controls()
+			# Um adaptador existente fica conectado, mas Pro nunca solicita
+			# anúncios. Se houver reembolso, a versão Free o reutiliza.
+		else:
+			_pending_pro_revocation = false
+			_pending_pro_preferences = false
+			match_mode = MatchMode.CLASSIC
+			point_limit = WIN_SCORE
+			ball_scale = 1.0
+			paddle_scale = 1.0
+			theme_index = 0
+			_sync_pro_controls()
+			if state in [GameState.SETTINGS, GameState.STATS]:
+				state = GameState.MENU
+	_billing_status = "PRO ATIVO — SEM ANÚNCIOS" if is_pro else "Pro disponível como compra única na Play Store."
+	_update_pro_ui()
+	_show_interface()
+	queue_redraw()
+
+
+func _settle_pro_transition(between_matches: bool = false) -> void:
+	if _active_ad_request_id != -1:
+		return
+	if _pending_pro_revocation:
+		_pending_pro_revocation = false
+		_apply_pro_entitlement(false, between_matches)
+	elif _pending_pro_preferences and is_pro:
+		_load_pro_settings()
+		_load_pro_stats()
+		_sync_pro_controls()
+	_pending_pro_preferences = false
+
+
+func _sync_pro_controls() -> void:
+	if is_instance_valid(_ball_slider):
+		_ball_slider.set_value_no_signal(ball_scale * 100.0)
+		_paddle_slider.set_value_no_signal(paddle_scale * 100.0)
+		_ball_value_label.text = "TAMANHO DA BOLA: %d%%" % roundi(ball_scale * 100.0)
+		_paddle_value_label.text = "ALTURA DAS RAQUETES: %d%%" % roundi(paddle_scale * 100.0)
+		_theme_selector.select(theme_index)
+		_mode_selector.select(int(match_mode))
+		_points_selector.select(_points_index())
+
+
+func _on_billing_availability(available: bool) -> void:
+	_billing_purchase_available = available
+	_update_pro_ui()
+
+
+func _on_billing_message(message: String) -> void:
+	_billing_status = message
+	_update_pro_ui()
+
+
+func _on_pro_price_changed(formatted_price: String) -> void:
+	_pro_price = formatted_price
+	_update_pro_ui()
+
+
+func _buy_pro() -> void:
+	if not is_pro and _billing_purchase_available and is_instance_valid(_billing_adapter):
+		_billing_adapter.purchase()
+
+
+func _restore_purchase() -> void:
+	if is_instance_valid(_billing_adapter):
+		_billing_adapter.refresh()
+
+
+func _update_pro_ui() -> void:
+	if not is_instance_valid(_pro_button):
+		return
+	_edition_title.text = "PONG PRO" if is_pro else "PONG"
+	_edition_subtitle.text = "SEM ANÚNCIOS  /  MAIS MODOS" if is_pro else "GRÁTIS  /  MOBILE"
+	_features_label.text = "MODOS EXTRAS E AJUSTES PERSONALIZADOS" if is_pro else "1 JOGADOR  •  PRIMEIRO A 7 PONTOS"
+	_pro_row.visible = is_pro
+	_pro_button.visible = not is_pro
+	_pro_button.text = "★  PRO  •  %s  ★" % _pro_price if not _pro_price.is_empty() else "★  DESBLOQUEAR PRO  ★"
+	_pro_button.disabled = not _billing_purchase_available
+	_restore_purchase_button.visible = not is_pro
+	_restore_purchase_button.disabled = not is_instance_valid(_billing_adapter)
+	_pro_status_label.text = "Verificação Pro pendente; partida atual preservada." if _pending_pro_revocation else "PRO ATIVO — SEM ANÚNCIOS" if is_pro else _billing_status
+	_privacy_edition_label.text = "Pro funciona sem anúncios; a compra é verificada na Play Store." if is_pro else "O jogo funciona offline; anúncios ainda não estão ativos."
+	_privacy_storage_label.text = "Preferências e estatísticas ficam no aparelho." if is_pro else "O direito Pro é restaurado pela conta da Play Store."
+
+
+func set_published_games(entries: Array) -> void:
+	published_games.clear()
+	for entry in entries:
+		if not entry is Dictionary:
+			continue
+		var url := str(entry.get("play_url", ""))
+		var package_id := url.trim_prefix("https://play.google.com/store/apps/details?id=").get_slice("&", 0)
+		if url.begins_with("https://play.google.com/store/apps/details?id=") \
+				and not package_id.is_empty() and package_id not in ["com.pitinga.pongmobile", "com.pitinga.pongmobile.pro"] \
+				and not str(entry.get("name", "")).is_empty():
+			published_games.append({"name": str(entry["name"]), "play_url": url})
+	_refresh_other_games()
+
+
+func _refresh_other_games() -> void:
+	if not is_instance_valid(_other_games_button):
+		return
+	_other_games_button.disabled = published_games.is_empty()
+	_other_games_button.text = "OUTROS JOGOS  •  EM BREVE" if published_games.is_empty() else "🎮  INSTALE OUTROS JOGOS"
+	for child in _other_games_content.get_children():
+		_other_games_content.remove_child(child)
+		child.queue_free()
+	for entry in published_games:
+		var button := _new_button("INSTALE  " + entry["name"], GRID, false)
+		button.custom_minimum_size.y = 42
+		_other_games_content.add_child(button)
+		button.pressed.connect(_open_game_store.bind(entry["play_url"]))
+
+
+func _open_other_games() -> void:
+	if published_games.is_empty():
+		return
+	state = GameState.OTHER_GAMES
+	_show_interface()
+
+
+func _open_game_store(url: String) -> void:
+	if url.begins_with("https://play.google.com/store/apps/details?id="):
+		OS.shell_open(url)
 
 
 func _show_interface() -> void:
@@ -937,6 +1170,7 @@ func _show_interface() -> void:
 	_privacy_menu.visible = state == GameState.PRIVACY
 	_settings_menu.visible = state == GameState.SETTINGS
 	_stats_menu.visible = state == GameState.STATS
+	_other_games_menu.visible = state == GameState.OTHER_GAMES
 	_pause_button.visible = state == GameState.PLAYING
 
 
@@ -1145,9 +1379,9 @@ func _restore_pro_defaults() -> void:
 func _build_interface() -> void:
 	_menu = _new_overlay()
 	var menu_content := _overlay_content(_menu)
-	menu_content.add_theme_constant_override("separation", 8)
-	_add_label(menu_content, "PONG PRO" if is_pro else "PONG", 60, WHITE)
-	_add_label(menu_content, "SEM ANÚNCIOS  /  MAIS MODOS" if is_pro else "ARCADE  /  MOBILE", 15, CYAN)
+	menu_content.add_theme_constant_override("separation", 5)
+	_edition_title = _add_label(menu_content, "PONG", 60, WHITE)
+	_edition_subtitle = _add_label(menu_content, "GRÁTIS  /  MOBILE", 15, CYAN)
 	_add_space(menu_content, 6)
 	_add_label(menu_content, "ESCOLHA A DIFICULDADE", 15, MUTED)
 	var levels := HBoxContainer.new()
@@ -1164,33 +1398,46 @@ func _build_interface() -> void:
 	start_button.custom_minimum_size = Vector2(0, 52)
 	menu_content.add_child(start_button)
 	start_button.pressed.connect(_start_match)
-	_add_label(menu_content, "MODOS EXTRAS E AJUSTES PERSONALIZADOS" if is_pro else "1 JOGADOR  •  PRIMEIRO A 7 PONTOS", 13, MUTED)
-	if is_pro:
-		var pro_row := HBoxContainer.new()
-		pro_row.add_theme_constant_override("separation", 10)
-		menu_content.add_child(pro_row)
-		var config_button := _new_button("PERSONALIZAR / MODOS", GRID, false)
-		config_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		config_button.custom_minimum_size.y = 40
-		config_button.add_theme_font_size_override("font_size", 14)
-		pro_row.add_child(config_button)
-		config_button.pressed.connect(_open_settings)
-		var stats_button := _new_button("ESTATÍSTICAS", GRID, false)
-		stats_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		stats_button.custom_minimum_size.y = 40
-		stats_button.add_theme_font_size_override("font_size", 14)
-		pro_row.add_child(stats_button)
-		stats_button.pressed.connect(_open_stats)
-	else:
-		_pro_button = _new_button("★  CONHEÇA O PONG PRO  ★", GRID, false)
-		_pro_button.custom_minimum_size.y = 40
-		_pro_button.add_theme_font_size_override("font_size", 15)
-		menu_content.add_child(_pro_button)
-		# Não oferecer uma ficha da loja que ainda não está publicada.
-		_pro_button.visible = OS.has_feature("pong_pro_store_live") and OS.get_name() == "Android"
-		_pro_button.pressed.connect(_open_pro_store)
+	_features_label = _add_label(menu_content, "1 JOGADOR  •  PRIMEIRO A 7 PONTOS", 13, MUTED)
+	_pro_row = HBoxContainer.new()
+	_pro_row.add_theme_constant_override("separation", 10)
+	menu_content.add_child(_pro_row)
+	var config_button := _new_button("PERSONALIZAR / MODOS", GRID, false)
+	config_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	config_button.custom_minimum_size.y = 40
+	config_button.add_theme_font_size_override("font_size", 14)
+	_pro_row.add_child(config_button)
+	config_button.pressed.connect(_open_settings)
+	var stats_button := _new_button("ESTATÍSTICAS", GRID, false)
+	stats_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_button.custom_minimum_size.y = 40
+	stats_button.add_theme_font_size_override("font_size", 14)
+	_pro_row.add_child(stats_button)
+	stats_button.pressed.connect(_open_stats)
+	var billing_row := HBoxContainer.new()
+	billing_row.add_theme_constant_override("separation", 8)
+	menu_content.add_child(billing_row)
+	_pro_button = _new_button("★  DESBLOQUEAR PRO  ★", GRID, false)
+	_pro_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pro_button.custom_minimum_size.y = 39
+	_pro_button.add_theme_font_size_override("font_size", 13)
+	billing_row.add_child(_pro_button)
+	_pro_button.pressed.connect(_buy_pro)
+	_restore_purchase_button = _new_button("RESTAURAR", GRID, false)
+	_restore_purchase_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_restore_purchase_button.custom_minimum_size.y = 39
+	_restore_purchase_button.add_theme_font_size_override("font_size", 12)
+	billing_row.add_child(_restore_purchase_button)
+	_restore_purchase_button.pressed.connect(_restore_purchase)
+	_pro_status_label = _add_label(menu_content, _billing_status, 11, MUTED)
+	_pro_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_other_games_button = _new_button("OUTROS JOGOS  •  EM BREVE", GRID, false)
+	_other_games_button.custom_minimum_size.y = 35
+	_other_games_button.add_theme_font_size_override("font_size", 13)
+	menu_content.add_child(_other_games_button)
+	_other_games_button.pressed.connect(_open_other_games)
 	var privacy_button := _new_button("PRIVACIDADE", GRID, false)
-	privacy_button.custom_minimum_size.y = 36
+	privacy_button.custom_minimum_size.y = 34
 	privacy_button.add_theme_font_size_override("font_size", 14)
 	menu_content.add_child(privacy_button)
 	privacy_button.pressed.connect(_open_privacy)
@@ -1233,14 +1480,29 @@ func _build_interface() -> void:
 	var privacy_content := _overlay_content(_privacy_menu)
 	privacy_content.add_theme_constant_override("separation", 10)
 	_add_label(privacy_content, "PRIVACIDADE", 40, WHITE)
-	_add_label(privacy_content, "Pong Pro funciona offline e sem anúncios." if is_pro else "Pong Free funciona offline; publicidade ainda não ativa.", 15, MUTED)
+	_privacy_edition_label = _add_label(privacy_content, "O jogo funciona offline; anúncios ainda não estão ativos.", 15, MUTED)
 	_add_label(privacy_content, "Não há cadastro nem análise de comportamento.", 15, MUTED)
-	_add_label(privacy_content, "Preferências e estatísticas Pro ficam no aparelho." if is_pro else "A política será atualizada antes de integrar anúncios.", 15, MUTED)
+	_privacy_storage_label = _add_label(privacy_content, "O direito Pro é restaurado pela conta da Play Store.", 15, MUTED)
 	_add_label(privacy_content, "Dúvidas: github.com/pitinga/game-pong-mobile/issues", 14, CYAN)
 	_add_space(privacy_content, 8)
 	var privacy_back_button := _new_button("VOLTAR AO MENU", CYAN, true)
 	privacy_content.add_child(privacy_back_button)
 	privacy_back_button.pressed.connect(_return_to_menu)
+
+	_other_games_menu = _new_overlay()
+	var other_content := _overlay_content(_other_games_menu)
+	_add_label(other_content, "CONHEÇA NOSSOS JOGOS", 32, WHITE)
+	_add_label(other_content, "TOQUE PARA INSTALAR PELA PLAY STORE", 13, MUTED)
+	var other_scroll := ScrollContainer.new()
+	other_scroll.custom_minimum_size.y = 240
+	other_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	other_content.add_child(other_scroll)
+	_other_games_content = VBoxContainer.new()
+	_other_games_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	other_scroll.add_child(_other_games_content)
+	var other_back_button := _new_button("VOLTAR AO MENU", CYAN, true)
+	other_content.add_child(other_back_button)
+	other_back_button.pressed.connect(_return_to_menu)
 
 	_settings_menu = _new_overlay()
 	var settings_content := _overlay_content(_settings_menu)
@@ -1298,6 +1560,8 @@ func _build_interface() -> void:
 	_pause_button.offset_bottom = 72
 	add_child(_pause_button)
 	_pause_button.pressed.connect(_toggle_pause)
+	_update_pro_ui()
+	_refresh_other_games()
 
 
 func _new_overlay() -> CenterContainer:
