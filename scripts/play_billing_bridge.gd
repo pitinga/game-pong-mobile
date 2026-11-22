@@ -224,9 +224,18 @@ func _on_connected() -> void:
 	# impedir restauração: o watchdog consulta compras após 5 s.
 	if is_inside_tree() and _awaiting_initial_details:
 		_details_watchdog_timer.start(5.0)
+	# Reconexão também recupera confirmações de compra interrompidas.
+	if not _ack_retry_attempts.is_empty():
+		_schedule_ack_retry()
 
 
 func _on_disconnected() -> void:
+	# O callback de acknowledge em voo pode nunca chegar após desconexão.
+	# Destravar os tokens e mantê-los na fila para nova tentativa.
+	for token in _acknowledging.keys():
+		if not _ack_retry_attempts.has(token):
+			_ack_retry_attempts[token] = 0
+	_acknowledging.clear()
 	entitlement_verification_failed.emit()
 	# Falhar fechado: uma consulta interrompida nunca autoriza exibição.
 	var pending_ad := int(_query_context.get("ad_id", -1))
@@ -422,7 +431,7 @@ func _acknowledge_if_needed(purchase: Dictionary) -> void:
 
 
 func _on_acknowledged(response: Dictionary) -> void:
-	var token := str(response.get("token", ""))
+	var token := str(response.get("token", response.get("purchase_token", "")))
 	if token.is_empty():
 		_acknowledging.clear()
 	else:
