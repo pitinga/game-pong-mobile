@@ -11,6 +11,7 @@ class FakeBilling:
 	signal purchase_message(message: String)
 	signal price_changed(formatted_price: String)
 	signal purchase_pending(pending: bool)
+	signal checkout_changed(in_progress: bool)
 	var starts := 0
 	var purchases := 0
 	var queries := 0
@@ -135,6 +136,10 @@ func _run() -> void:
 	fake.entitlement_checked.emit(false)
 	game._buy_pro()
 	_check(fake.purchases == 1 and not game.is_pro, "Tocar em comprar apenas abre fluxo externo: não libera Pro")
+	fake.checkout_changed.emit(true)
+	_check(game.entitlement_status == GameScript.EntitlementStatus.CHECKOUT and not game._pro_status_label.text.contains("ANÁLISE"), "Checkout não é apresentado incorretamente como pagamento pendente")
+	_check((game._menu.get_child(0) as PanelContainer).get_combined_minimum_size().y <= 530.0, "Menu Free cabe durante checkout")
+	fake.checkout_changed.emit(false)
 	fake.purchase_pending.emit(true)
 	fake.purchase_message.emit("Compra pendente")
 	_check(not game.is_pro and game.entitlement_status == GameScript.EntitlementStatus.PENDING and game._pro_status_label.text.contains("ANÁLISE"), "Compra pendente mantém recursos bloqueados e suprime anúncios")
@@ -250,15 +255,17 @@ func _run() -> void:
 	_check(not bridge._product_available, "Outro produto da loja não habilita compra Pro")
 	bridge._on_product_details({"response_code": 0, "product_details": [{"product_id": "pro_unlock", "one_time_purchase_offer_details_list": [{"offer_id": "", "purchase_option_id": "base", "formatted_price": "R$ 4,99"}]}]})
 	var pending_events: Array[bool] = []
+	var checkout_events: Array[bool] = []
 	bridge.purchase_pending.connect(func(pending: bool): pending_events.append(pending))
+	bridge.checkout_changed.connect(func(in_progress: bool): checkout_events.append(in_progress))
 	bridge.purchase()
-	_check(native.launches == 1 and native.last_option_id == "base" and bridge._price == "R$ 4,99" and pending_events.back(), "Compra usa preço localizado e bloqueia anúncios durante o checkout")
+	_check(native.launches == 1 and native.last_option_id == "base" and bridge._price == "R$ 4,99" and checkout_events.back() and pending_events.is_empty(), "Compra em andamento é diferente de pagamento pendente")
 	var bought := {"product_ids": PackedStringArray(["pro_unlock"]), "purchase_state": 1,
 		"purchase_token": "token-fake", "is_acknowledged": false}
 	var delivered: Array[bool] = []
 	bridge.entitlement_checked.connect(func(owned: bool): delivered.append(owned))
 	bridge._on_purchase_updated({"response_code": 1})
-	_check(delivered.is_empty() and not pending_events.back(), "Cancelamento da compra não libera Pro nem deixa pendência ativa")
+	_check(delivered.is_empty() and not bridge._pending_purchase and not bridge._checkout_in_progress, "Cancelamento da compra não libera Pro nem deixa pendência ativa")
 	bridge._on_purchase_updated({"response_code": 0, "purchases": [{"product_ids": ["outro_item"], "purchase_state": 1}]})
 	_check(delivered.is_empty(), "Callback de produto diferente não libera Pro")
 	bridge._on_purchases({"response_code": 0, "purchases": [{"product_ids": ["pro_unlock"], "purchase_state": 2}]})
@@ -302,6 +309,7 @@ func _run() -> void:
 	_check(native.queries == queries_before and bridge._awaiting_initial_details, "Conexão consulta detalhes do produto antes de consultar compras")
 	bridge._on_product_details({"response_code": 2})
 	_check(native.queries == queries_before + 1 and not bridge._awaiting_initial_details, "Erro ao obter preço não impede restauração de compra")
+	bridge._on_purchases({"response_code": -1})
 	bridge._on_connected()
 	queries_before = native.queries
 	bridge._restore_after_product_details()

@@ -4,7 +4,7 @@ extends Control
 enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY, SETTINGS, STATS, OTHER_GAMES }
 enum MatchMode { CLASSIC, SURVIVAL, TWO_PLAYERS }
 enum InterstitialState { IDLE, REQUESTED, SHOWING }
-enum EntitlementStatus { UNKNOWN, FREE_CONFIRMED, PRO, PENDING }
+enum EntitlementStatus { UNKNOWN, FREE_CONFIRMED, PRO, PENDING, CHECKOUT }
 
 const AdPolicy = preload("res://scripts/ad_policy.gd")
 const PlayBillingBridge = preload("res://scripts/play_billing_bridge.gd")
@@ -20,6 +20,7 @@ const RELEASED_GAME_CATALOG := []
 const AD_REQUEST_TIMEOUT_MSEC := 8000
 const AD_SHOWING_TIMEOUT_MSEC := 120000
 const AD_RECOVERY_RETRY_MSEC := 4000
+const AD_VERIFY_TIMEOUT_MSEC := 4000
 const IMPACT_EPSILON := 0.000001
 const MAX_IMPACTS_PER_SUBSTEP := 12
 
@@ -94,6 +95,10 @@ var _pending_pro_revocation := false
 var _interstitial_attempted_this_match := false
 var _interstitial_state: InterstitialState = InterstitialState.IDLE
 var _ad_request_sequence := 0
+var _ad_verification_sequence := 0
+var _ad_verification_id := -1
+var _ad_verification_match_id := -1
+var _ad_verification_start_ticks := 0
 var _active_ad_request_id := -1
 var _ad_requested_at_ticks := 0
 var _ad_next_recovery_attempt_ticks := 0
@@ -180,6 +185,8 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	if _ad_verification_id != -1 and Time.get_ticks_msec() - _ad_verification_start_ticks >= AD_VERIFY_TIMEOUT_MSEC:
+		_on_ad_verification_timeout()
 	if _active_ad_request_id == -1:
 		return
 	if not is_instance_valid(_interstitial_adapter):
@@ -566,6 +573,7 @@ func _draw_centered(message: String, baseline: Vector2, font_size: int, color: C
 func _start_match() -> void:
 	if _active_ad_request_id != -1:
 		return
+	_on_ad_verification_timeout()
 	_break_streak_on_abandon()
 	# Uma revogação recebida durante a partida anterior só entra na
 	# próxima partida; não mudar regras/raquetes em pleno rally.
@@ -772,6 +780,8 @@ func set_ad_consent_granted(granted: bool) -> void:
 	## O SDK/gerenciador de consentimento futuro deve chamar isto depois da
 	## autorização real. A política começa SEM consentimento por segurança.
 	_ads_consent_granted = granted
+	if not granted:
+		_on_ad_verification_timeout()
 	_refresh_ads_allowed()
 
 
@@ -793,6 +803,8 @@ func set_interstitial_adapter(adapter: Node) -> void:
 	## sinais interstitial_opened/impression/closed/failed(id).
 	## Só conectar ao terminar o SDK/consentimento. Com Pro ativo,
 	## não solicitar anúncios, mas conservar o adaptador para reembolso.
+	if _interstitial_adapter != adapter:
+		_on_ad_verification_timeout()
 	if _active_ad_request_id != -1:
 		if is_instance_valid(_interstitial_adapter) and not _interstitial_adapter.cancel_interstitial(_active_ad_request_id):
 			push_warning("Não é seguro substituir o adaptador durante uma exibição pendente.")
@@ -836,19 +848,53 @@ func _try_show_interstitial_after_match(match_id: int = -1) -> void:
 		return
 	if not _interstitial_adapter.is_interstitial_loaded() or not _ad_policy.can_show(_ad_now_msec()):
 		return
-	# Uma tentativa por encerramento; falta de inventário não bloqueia o jogo.
+	# Falhar fechado: se a Play não responder a uma consulta NOVA e exclusiva,
+	# nenhum anúncio será solicitado, mesmo se o cache disser Free.
+	if not is_instance_valid(_billing_adapter) or not _billing_adapter.has_method("verify_free_before_ad") \
+			or not _billing_adapter.has_signal("ad_verification_result"):
+		return
 	_interstitial_attempted_this_match = true
+	_ad_verification_sequence += 1
+	_ad_verification_id = _ad_verification_sequence
+	_ad_verification_match_id = _match_id
+	_ad_verification_start_ticks = Time.get_ticks_msec()
+	_billing_adapter.verify_free_before_ad(_ad_verification_id)
+
+
+func _on_ad_verification_timeout() -> void:
+	if _ad_verification_id == -1:
+		return
+	var old_id := _ad_verification_id
+	_ad_verification_id = -1
+	_ad_verification_match_id = -1
+	if is_instance_valid(_billing_adapter) and _billing_adapter.has_method("cancel_ad_verification"):
+		_billing_adapter.cancel_ad_verification(old_id)
+
+
+func _on_ad_verification_result(request_id: int, confirmed_free: bool) -> void:
+	if request_id != _ad_verification_id:
+		return
+	var match_id := _ad_verification_match_id
+	_ad_verification_id = -1
+	_ad_verification_match_id = -1
+	if not confirmed_free or match_id != _match_id or state != GameState.FINISHED \
+			or not _ads_allowed_now() or _active_ad_request_id != -1 \
+			or not is_instance_valid(_interstitial_adapter) or not _interstitial_adapter.is_interstitial_loaded() \
+			or not _ad_policy.can_show(_ad_now_msec()):
+		return
+	# Ao contrário da verificação, só a solicitação nativa efetiva bloqueia
+	# os botões. O jogador pode navegar enquanto a Play está consultando.
 	_ad_request_sequence += 1
-	var request_id := _ad_request_sequence
-	_ad_requests[request_id] = {"impressed": false, "canceled": false, "failed": false}
-	_active_ad_request_id = request_id
+	var interstitial_request_id := _ad_request_sequence
+	_ad_requests[interstitial_request_id] = {"impressed": false, "canceled": false, "failed": false}
+	_active_ad_request_id = interstitial_request_id
 	_interstitial_state = InterstitialState.REQUESTED
 	_ad_requested_at_ticks = Time.get_ticks_msec()
 	_ad_next_recovery_attempt_ticks = 0
 	_ad_recovery_needed = false
 	_set_ad_buttons_busy(true)
-	if not _interstitial_adapter.show_interstitial(request_id):
-		_on_interstitial_failed(request_id)
+	if not _interstitial_adapter.show_interstitial(interstitial_request_id):
+		_on_interstitial_failed(interstitial_request_id)
 	# Manter somente um histórico recente de IDs para ignorar callbacks
 	# duplicados/antigos sem acumular dados durante meses de partidas.
 	if _ad_requests.size() > 32:
@@ -957,6 +1003,7 @@ func _toggle_pause() -> void:
 func _return_to_menu() -> void:
 	if _active_ad_request_id != -1:
 		return
+	_on_ad_verification_timeout()
 	_break_streak_on_abandon()
 	_clear_touch_captures()
 	state = GameState.MENU
@@ -990,15 +1037,18 @@ func _open_stats() -> void:
 
 
 func set_billing_adapter(adapter: Node) -> void:
-	## Adaptador injetável: sinais entitlement_checked(bool),
-	## availability_changed(bool), purchase_message(String);
-	## métodos start(), purchase() e refresh().
+	## Adaptador injetável: além dos sinais antigos, checkout_changed(bool)
+	## e ad_verification_result(id, free). Métodos: start/purchase/refresh,
+	## restore() e verify_free_before_ad(id), cancel_ad_verification(id).
 	if _billing_adapter == adapter:
 		return
+	_on_ad_verification_timeout()
 	if is_instance_valid(_billing_adapter):
 		for connection in [
 			["entitlement_checked", Callable(self, "_on_entitlement_checked")],
 			["purchase_pending", Callable(self, "_on_purchase_pending")],
+			["checkout_changed", Callable(self, "_on_checkout_changed")],
+			["ad_verification_result", Callable(self, "_on_ad_verification_result")],
 			["availability_changed", Callable(self, "_on_billing_availability")],
 			["purchase_message", Callable(self, "_on_billing_message")],
 			["price_changed", Callable(self, "_on_pro_price_changed")],
@@ -1024,6 +1074,10 @@ func set_billing_adapter(adapter: Node) -> void:
 	adapter.entitlement_checked.connect(_on_entitlement_checked)
 	if adapter.has_signal("purchase_pending"):
 		adapter.purchase_pending.connect(_on_purchase_pending)
+	if adapter.has_signal("checkout_changed"):
+		adapter.checkout_changed.connect(_on_checkout_changed)
+	if adapter.has_signal("ad_verification_result"):
+		adapter.ad_verification_result.connect(_on_ad_verification_result)
 	adapter.availability_changed.connect(_on_billing_availability)
 	adapter.purchase_message.connect(_on_billing_message)
 	if adapter.has_signal("price_changed"):
@@ -1049,6 +1103,7 @@ func _on_entitlement_checked(owned: bool) -> void:
 	# desde a primeira, preservando o histórico entre sessões.
 	var now := int(Time.get_unix_time_from_system())
 	if owned:
+		_on_ad_verification_timeout()
 		_cached_pro_owned = true
 		_last_positive_unix = now
 		_negative_first_unix = 0
@@ -1057,6 +1112,8 @@ func _on_entitlement_checked(owned: bool) -> void:
 		entitlement_status = EntitlementStatus.PRO
 		_save_pro_entitlement_cache()
 		_apply_pro_entitlement(true)
+		return
+	if entitlement_status == EntitlementStatus.CHECKOUT:
 		return
 	if _cached_pro_owned:
 		if _negative_first_unix <= 0 or now < _negative_first_unix:
@@ -1101,8 +1158,21 @@ func _on_purchase_pending(pending: bool) -> void:
 	# qualquer carga ou impressão publicitária até uma resposta definitiva.
 	if is_pro:
 		return
+	if pending:
+		_on_ad_verification_timeout()
 	entitlement_status = EntitlementStatus.PENDING if pending else EntitlementStatus.UNKNOWN
 	_billing_status = "PAGAMENTO EM ANÁLISE — sem anúncios enquanto estiver pendente." if pending else "Verificando compra na conta Google..."
+	_refresh_ads_allowed()
+	_update_pro_ui()
+
+
+func _on_checkout_changed(in_progress: bool) -> void:
+	if is_pro:
+		return
+	if in_progress:
+		_on_ad_verification_timeout()
+	entitlement_status = EntitlementStatus.CHECKOUT if in_progress else EntitlementStatus.UNKNOWN
+	_billing_status = "COMPRA EM ANDAMENTO — aguardando a Play Store." if in_progress else "Verificando compra na conta Google..."
 	_refresh_ads_allowed()
 	_update_pro_ui()
 
@@ -1197,7 +1267,10 @@ func _buy_pro() -> void:
 
 func _restore_purchase() -> void:
 	if is_instance_valid(_billing_adapter):
-		_billing_adapter.refresh()
+		if _billing_adapter.has_method("restore"):
+			_billing_adapter.restore()
+		else:
+			_billing_adapter.refresh()
 
 
 func _update_pro_ui() -> void:
@@ -1219,6 +1292,7 @@ func _update_pro_ui() -> void:
 			else "PRO MANTIDO — confira conta Google e toque RESTAURAR." if is_pro and _negative_count > 0 \
 			else "PRO ATIVO — SEM ANÚNCIOS" if is_pro \
 			else "PAGAMENTO EM ANÁLISE — sem anúncios." if entitlement_status == EntitlementStatus.PENDING \
+			else "COMPRA EM ANDAMENTO — aguardando a Play Store." if entitlement_status == EntitlementStatus.CHECKOUT \
 			else _billing_status
 	_privacy_edition_label.text = "Pro funciona sem anúncios; a compra é verificada na Play Store." if is_pro else "O jogo funciona offline; anúncios ainda não estão ativos."
 	_privacy_storage_label.text = "Preferências e estatísticas ficam no aparelho." if is_pro else "O direito Pro é restaurado pela conta da Play Store."

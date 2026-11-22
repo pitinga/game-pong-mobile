@@ -8,6 +8,7 @@
 - **Ainda não existe integração do SDK nativo AdMob**. A modalidade gratuita não exibe anúncios nem utiliza identificador de publicidade nesta versão. O app pode continuar funcionando offline.
 - **Não há segundo pacote Pro.** A compra interna `pro_unlock` é consultada no mesmo aplicativo por Google Play Billing. Quando o direito Pro está ativo, não solicitar, carregar nem exibir publicidade.
 - A permissão de anúncios **não depende apenas** de `is_pro == false`: é preciso uma consulta bem-sucedida da Play que confirme Free **na sessão corrente**, sem pagamento pendente, e consentimento autorizado. Na primeira abertura, em reinstalação sem cache, durante pendência, com Pro no cache e durante falha da loja, o adaptador permanece com publicidade bloqueada. Uma negativa isolada não revoga Pro: a carência exige duas negativas espaçadas por 24 h e 48 h desde a primeira; uma positiva zera o histórico.
+- Além dessa permissão para pré-carga, **cada exibição elegível** passa por `PlayBillingBridge.verify_free_before_ad(request_id)`, que consulta novamente `queryPurchases`. A ponte serializa consultas, identifica callbacks de anúncios e responde via `ad_verification_result(request_id, confirmed_free)`. O jogo espera no máximo **4 segundos**, sem bloquear navegação: só mostra intersticial quando a resposta nova confirma Free, a mesma partida continua finalizada e consentimento, inventário e frequência permanecem válidos. Falhas e callbacks tardios descartam o anúncio. A ponte aceita `cancel_ad_verification(request_id)` para desassociar verificações expiradas. Sem Billing compatível, não há anúncios.
 
 ## Para habilitar anúncios antes do lançamento monetizado
 
@@ -29,7 +30,7 @@
 6. Configurar limite adicional de **6 impressões por hora** no [painel do AdMob](https://support.google.com/admob/answer/6244508) e bloquear categorias inapropriadas para o público esperado.
    - Os limites salvos no dispositivo protegem contra reiniciar o aplicativo para zerar a contagem, mas **não são antifraude**: o relógio pode ser alterado pelo usuário. O limite configurado na rede continua sendo necessário.
 7. Atualizar a política de privacidade do aplicativo único e o formulário **Segurança dos dados** da Play Store de acordo com as informações coletadas pelo SDK, incluindo consentimento exigido nos países aplicáveis.
-8. Validar no **mesmo AAB**: Free confirmado com consentimento, Free sem consentimento, verificação desconhecida, pendência, Pro confirmado, Pro em carência de revogação e reembolso efetivo. Incluir atualização/reinstalação, troca da conta Google, retomada e recuperação de exibição pendente. Os fakes headless não substituem teste do SDK com contas de licença.
+8. Validar no **mesmo AAB**: Free confirmado com consentimento, Free sem consentimento, checkout aberto, pendência real, verificação desconhecida, Pro confirmado, Pro em carência de revogação e reembolso efetivo. Incluir atualização/reinstalação, troca da conta Google, consulta fresca antes de anúncio, timeout, retomada e recuperação de exibição pendente. Os fakes headless não substituem teste do SDK com contas de licença.
 
 ## Regra de experiência do jogador
 

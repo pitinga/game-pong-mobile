@@ -35,6 +35,7 @@ Recursos:
 - No Pro: Sobrevivência, dois jogadores locais, temas, tamanhos da bola e das raquetes e estatísticas.
 - Sem necessidade de cadastro no jogo; a compra é gerenciada pela Google Play.
 - Uma compra Pro existente pode ser recuperada pelo botão Restaurar, com a mesma conta Google utilizada na compra.
+- O menu diferencia compra em andamento de pagamento pendente de aprovação; a mensagem sobre compra não encontrada aparece ao solicitar Restaurar.
 
 Escolha a dificuldade, ajuste sua estratégia e desafie o computador!
 

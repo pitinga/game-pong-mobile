@@ -11,6 +11,8 @@ class FakeBilling:
 	signal availability_changed(available: bool)
 	signal purchase_message(message: String)
 	signal purchase_pending(pending: bool)
+	signal checkout_changed(in_progress: bool)
+	signal ad_verification_result(request_id: int, confirmed_free: bool)
 	var restores := 0
 
 	func start() -> void:
@@ -21,6 +23,16 @@ class FakeBilling:
 
 	func refresh() -> void:
 		restores += 1
+
+	func verify_free_before_ad(request_id: int) -> void:
+		ad_verification_result.emit(request_id, true)
+
+
+class FakeNative:
+	extends Node
+	var queries := 0
+	func queryPurchases(_kind: String, _suspended: bool) -> void:
+		queries += 1
 
 
 class FakeInterstitial:
@@ -221,6 +233,9 @@ func _run() -> void:
 	clean.free()
 
 	var bridge := BillingBridge.new()
+	var native := FakeNative.new()
+	bridge._native = native
+	bridge._connected = true
 	var messages: Array[String] = []
 	var entitlements: Array[bool] = []
 	bridge.purchase_message.connect(func(message: String): messages.append(message))
@@ -229,10 +244,14 @@ func _run() -> void:
 		"product_ids": PackedStringArray(["pro_unlock"]), "purchase_state": 2,
 	}]})
 	_check(bridge._pending_purchase and entitlements.is_empty(), "Compra nativa pendente não emite revogação")
+	var message_count_before := messages.size()
 	bridge._on_purchases({"response_code": 0, "purchases": []})
-	_check(not bridge._pending_purchase and entitlements == [false] \
-			and "conta Google" in messages.back() and "RESTAURAR" in messages.back() \
-			and "suporte" in messages.back(), "Consulta vazia orienta conta correta, Restaurar e suporte")
+	_check(not bridge._pending_purchase and entitlements == [false] and messages.size() == message_count_before, "Consulta automática Free não sugere erro de compra inexistente")
+	bridge.restore()
+	bridge._on_purchases({"response_code": 0, "purchases": []})
+	_check("conta Google" in messages.back() and "RESTAURAR" in messages.back() \
+			and "suporte" in messages.back(), "Restaurar sem compra orienta conta correta e suporte")
+	bridge._native = null
 	bridge.free()
 
 	for path in files.values():

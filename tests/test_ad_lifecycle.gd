@@ -12,6 +12,18 @@ class CountingPolicy:
 		completions += 1
 		super.note_finished_match()
 
+class FakeBilling:
+	extends Node
+	signal entitlement_checked(owned: bool)
+	signal availability_changed(available: bool)
+	signal purchase_message(message: String)
+	signal ad_verification_result(request_id: int, confirmed_free: bool)
+	func start() -> void: pass
+	func purchase() -> void: pass
+	func refresh() -> void: pass
+	func verify_free_before_ad(request_id: int) -> void:
+		ad_verification_result.emit(request_id, true)
+
 class DelayedInterstitial:
 	extends Node
 	signal interstitial_opened(request_id: int)
@@ -79,6 +91,7 @@ func _run() -> void:
 	await process_frame
 	game._on_entitlement_checked(false)
 	game.set_ad_consent_granted(true)
+	game.set_billing_adapter(FakeBilling.new())
 	var mock := DelayedInterstitial.new()
 	game.add_child(mock)
 	game.set_interstitial_adapter(mock)

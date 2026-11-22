@@ -5,6 +5,18 @@ extends SceneTree
 const GameScript = preload("res://scripts/pong.gd")
 const AdPolicy = preload("res://scripts/ad_policy.gd")
 
+class FakeBilling:
+	extends Node
+	signal entitlement_checked(owned: bool)
+	signal availability_changed(available: bool)
+	signal purchase_message(message: String)
+	signal ad_verification_result(request_id: int, confirmed_free: bool)
+	func start() -> void: pass
+	func purchase() -> void: pass
+	func refresh() -> void: pass
+	func verify_free_before_ad(request_id: int) -> void:
+		ad_verification_result.emit(request_id, true)
+
 class FakeInterstitialAdapter:
 	extends Node
 	signal interstitial_opened(request_id: int)
@@ -307,6 +319,7 @@ func _run_tests() -> void:
 	# Não carrega SDK, faz solicitações à rede nem usa identificadores reais.
 	game._on_entitlement_checked(false)
 	game.set_ad_consent_granted(true)
+	game.set_billing_adapter(FakeBilling.new())
 	var fake_ad := FakeInterstitialAdapter.new()
 	fake_ad.game = game
 	game.add_child(fake_ad)

@@ -51,6 +51,7 @@ jobs:
           godot --headless --path . --script res://tests/test_storage_recovery.gd
           godot --headless --path . --script res://tests/test_pro_billing.gd
           godot --headless --path . --script res://tests/test_pro_ad_safety.gd
+          godot --headless --path . --script res://tests/test_ad_entitlement_preflight.gd
 
       - name: Configurar exportador Android
         shell: bash

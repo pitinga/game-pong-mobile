@@ -7,6 +7,8 @@ signal availability_changed(available: bool)
 signal purchase_message(message: String)
 signal price_changed(formatted_price: String)
 signal purchase_pending(pending: bool)
+signal checkout_changed(in_progress: bool)
+signal ad_verification_result(request_id: int, confirmed_free: bool)
 
 const PRODUCT_ID := "pro_unlock"
 const RESPONSE_OK := 0
@@ -18,6 +20,7 @@ const PENDING := 2
 const CONNECT_RETRY_LIMIT := 5
 const ACK_RETRY_LIMIT := 5
 const PURCHASE_SETTLE_MSEC := 300_000
+const CHECKOUT_WATCHDOG_SEC := 20.0
 
 var _native: Object
 var _product_available := false
@@ -30,6 +33,10 @@ var _connection_retry_attempts := 0
 var _connecting := false
 var _awaiting_initial_details := false
 var _pending_purchase := false
+var _checkout_in_progress := false
+var _query_active := false
+var _query_context: Dictionary = {}
+var _query_queue: Array[Dictionary] = []
 var _acknowledging: Dictionary = {}
 var _ack_retry_attempts: Dictionary = {}
 var _reconnect_timer := Timer.new()
@@ -37,10 +44,11 @@ var _connect_timeout_timer := Timer.new()
 var _details_watchdog_timer := Timer.new()
 var _purchase_recheck_timer := Timer.new()
 var _ack_retry_timer := Timer.new()
+var _checkout_watchdog := Timer.new()
 
 
 func _init() -> void:
-	for timer in [_reconnect_timer, _connect_timeout_timer, _details_watchdog_timer, _purchase_recheck_timer, _ack_retry_timer]:
+	for timer in [_reconnect_timer, _connect_timeout_timer, _details_watchdog_timer, _purchase_recheck_timer, _ack_retry_timer, _checkout_watchdog]:
 		timer.one_shot = true
 		add_child(timer)
 	_reconnect_timer.timeout.connect(_retry_connection)
@@ -48,6 +56,7 @@ func _init() -> void:
 	_details_watchdog_timer.timeout.connect(_restore_after_product_details)
 	_purchase_recheck_timer.timeout.connect(refresh)
 	_ack_retry_timer.timeout.connect(_retry_acknowledgements)
+	_checkout_watchdog.timeout.connect(_on_checkout_timeout)
 
 
 func start() -> void:
@@ -88,7 +97,7 @@ func _on_connect_timeout() -> void:
 
 func refresh() -> void:
 	if _native != null and _connected:
-		_native.call("queryPurchases", PRODUCT_INAPP, false)
+		_queue_purchase_query(-1, false)
 	elif _native != null:
 		# Também reabrir ao voltar do segundo plano, mesmo após esgotar os retries.
 		if not _connecting:
@@ -99,15 +108,96 @@ func refresh() -> void:
 		purchase_message.emit("Google Play indisponível. Tente novamente com internet.")
 
 
+func restore() -> void:
+	# Somente uma ação explícita do jogador mostra a orientação de conta
+	# quando nenhuma compra for encontrada.
+	if _native == null:
+		refresh()
+		return
+	_query_queue.append({"ad_id": -1, "manual_restore": true})
+	if _connected:
+		_dispatch_purchase_query()
+	else:
+		refresh()
+
+
+func verify_free_before_ad(request_id: int) -> void:
+	# A resposta deve pertencer a ESTA consulta, e não a um refresh antigo.
+	# Fila única impede que callbacks sem request_id do SDK se misturem.
+	if _native == null or not _connected or _checkout_in_progress or _pending_purchase:
+		ad_verification_result.emit(request_id, false)
+		return
+	_queue_purchase_query(request_id, false)
+
+
+func cancel_ad_verification(request_id: int) -> void:
+	for i in range(_query_queue.size() - 1, -1, -1):
+		if int(_query_queue[i].get("ad_id", -1)) == request_id:
+			_query_queue.remove_at(i)
+	# A consulta nativa já iniciada não é cancelável; manter o slot ocupado
+	# até o retorno, mas desassociá-lo da tentativa que expirou.
+	if int(_query_context.get("ad_id", -1)) == request_id:
+		_query_context["ad_id"] = -1
+
+
+func _queue_purchase_query(ad_id: int, manual_restore: bool) -> void:
+	# Reconexões e retomadas podem pedir refresh repetido; coalescer apenas
+	# os automáticos, nunca Restaurar nem uma verificação de anúncio com ID.
+	if ad_id < 0 and not manual_restore:
+		if _query_active and int(_query_context.get("ad_id", -1)) < 0 \
+				and not bool(_query_context.get("manual_restore", false)):
+			return
+		for queued in _query_queue:
+			if int(queued.get("ad_id", -1)) < 0 and not bool(queued.get("manual_restore", false)):
+				return
+	_query_queue.append({"ad_id": ad_id, "manual_restore": manual_restore})
+	_dispatch_purchase_query()
+
+
+func _dispatch_purchase_query() -> void:
+	if _query_active or _query_queue.is_empty() or _native == null or not _connected:
+		return
+	_query_context = _query_queue.pop_front()
+	_query_active = true
+	_native.call("queryPurchases", PRODUCT_INAPP, false)
+
+
+func _finish_purchase_query(verified_free: bool = false) -> void:
+	var ad_id := int(_query_context.get("ad_id", -1)) if _query_active else -1
+	_query_context.clear()
+	_query_active = false
+	if ad_id >= 0:
+		ad_verification_result.emit(ad_id, verified_free)
+	_dispatch_purchase_query()
+
+
 func purchase() -> void:
 	if not _connected or not _product_available or _native == null:
 		purchase_message.emit("Compra indisponível. Verifique a Play Store e tente novamente.")
 		return
-	_set_purchase_pending(true)
+	_set_checkout_in_progress(true)
 	var result: Dictionary = _native.call("purchase", PRODUCT_ID, _purchase_option_id, "", false)
 	if int(result.get("response_code", -1)) != RESPONSE_OK:
-		_set_purchase_pending(false)
+		_set_checkout_in_progress(false)
 		purchase_message.emit("Não foi possível abrir a compra. Tente novamente.")
+	elif is_inside_tree() and _checkout_in_progress:
+		_checkout_watchdog.start(CHECKOUT_WATCHDOG_SEC)
+
+
+func _set_checkout_in_progress(in_progress: bool) -> void:
+	if _checkout_in_progress == in_progress:
+		return
+	_checkout_in_progress = in_progress
+	if not in_progress:
+		_checkout_watchdog.stop()
+	checkout_changed.emit(in_progress)
+
+
+func _on_checkout_timeout() -> void:
+	if _checkout_in_progress:
+		_set_checkout_in_progress(false)
+		purchase_message.emit("Aguardando confirmação da Play Store. Toque em RESTAURAR para verificar.")
+		refresh()
 
 
 func _set_purchase_pending(pending: bool) -> void:
@@ -132,6 +222,16 @@ func _on_connected() -> void:
 
 
 func _on_disconnected() -> void:
+	# Falhar fechado: uma consulta interrompida nunca autoriza exibição.
+	var pending_ad := int(_query_context.get("ad_id", -1))
+	_query_context.clear()
+	_query_active = false
+	if pending_ad >= 0:
+		ad_verification_result.emit(pending_ad, false)
+	for item in _query_queue:
+		if int(item.get("ad_id", -1)) >= 0:
+			ad_verification_result.emit(int(item["ad_id"]), false)
+	_query_queue.clear()
 	_connected = false
 	_connecting = false
 	_connect_timeout_timer.stop()
@@ -205,6 +305,7 @@ func _on_product_details(response: Dictionary) -> void:
 func _on_purchases(response: Dictionary) -> void:
 	if int(response.get("response_code", -1)) != RESPONSE_OK:
 		purchase_message.emit("Não foi possível restaurar compras agora. Tente novamente.")
+		_finish_purchase_query(false)
 		return
 	var owned := false
 	var pending := false
@@ -218,15 +319,25 @@ func _on_purchases(response: Dictionary) -> void:
 		elif int(purchase.get("purchase_state", -1)) == PENDING:
 			pending = true
 	if pending and not owned:
+		_set_checkout_in_progress(false)
 		_set_purchase_pending(true)
 		purchase_message.emit("Compra pendente de aprovação no Google Play.")
+		_finish_purchase_query(false)
 		return
+	if _checkout_in_progress and not owned:
+		# Uma consulta iniciada antes do checkout pode voltar vazia enquanto
+		# o jogador ainda está pagando; não reclassificar como Free.
+		_finish_purchase_query(false)
+		return
+	if owned:
+		_set_checkout_in_progress(false)
 	_set_purchase_pending(false)
 	# Consultas iniciadas antes da compra e atrasos de propagação da Play
 	# podem retornar vazias após PURCHASED. Manter o direito por até 5 min
 	# enquanto rechecamos; depois disso uma consulta OK sem compra revoga.
 	if not owned and _recent_purchase_deadline_msec > Time.get_ticks_msec():
 		_schedule_purchase_recheck()
+		_finish_purchase_query(false)
 		return
 	_recent_purchase_deadline_msec = 0
 	_purchase_recheck_timer.stop()
@@ -234,21 +345,25 @@ func _on_purchases(response: Dictionary) -> void:
 	entitlement_checked.emit(owned)
 	if owned:
 		purchase_message.emit("Pro restaurado: anúncios desativados.")
-	else:
+	elif bool(_query_context.get("manual_restore", false)):
 		purchase_message.emit("Pro não encontrado nesta conta Google da Play Store. Se já comprou, selecione a conta usada na compra e toque em RESTAURAR; procure o suporte se persistir.")
+	_finish_purchase_query(not owned)
 
 
 func _on_purchase_updated(response: Dictionary) -> void:
 	var code := int(response.get("response_code", -1))
 	if code == RESPONSE_CANCELED:
+		_set_checkout_in_progress(false)
 		_set_purchase_pending(false)
 		purchase_message.emit("Compra cancelada.")
 		refresh()
 		return
 	if code == RESPONSE_ALREADY_OWNED:
+		_set_checkout_in_progress(false)
 		refresh()
 		return
 	if code != RESPONSE_OK:
+		_set_checkout_in_progress(false)
 		_set_purchase_pending(false)
 		purchase_message.emit("Compra não concluída. Tente novamente.")
 		refresh()
@@ -259,6 +374,7 @@ func _on_purchase_updated(response: Dictionary) -> void:
 		if not PRODUCT_ID in purchase.get("product_ids", []):
 			continue
 		if int(purchase.get("purchase_state", -1)) == PURCHASED:
+			_set_checkout_in_progress(false)
 			_set_purchase_pending(false)
 			_acknowledge_if_needed(purchase)
 			_recent_purchase_deadline_msec = Time.get_ticks_msec() + PURCHASE_SETTLE_MSEC
@@ -269,6 +385,7 @@ func _on_purchase_updated(response: Dictionary) -> void:
 		elif int(purchase.get("purchase_state", -1)) == PENDING:
 			pending = true
 	if pending:
+		_set_checkout_in_progress(false)
 		_set_purchase_pending(true)
 		purchase_message.emit("Compra pendente de aprovação no Google Play.")
 
@@ -330,5 +447,6 @@ func _exit_tree() -> void:
 	_details_watchdog_timer.stop()
 	_purchase_recheck_timer.stop()
 	_ack_retry_timer.stop()
+	_checkout_watchdog.stop()
 	if _native != null:
 		_native.call("endConnection")
