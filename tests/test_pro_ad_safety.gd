@@ -276,6 +276,7 @@ func _run() -> void:
 			and "suporte" in messages.back(), "Restaurar sem compra orienta conta correta e suporte")
 	bridge._native = null
 	bridge.free()
+	native.free()
 
 	for path in files.values():
 		for suffix in ["", ".bak", ".tmp"]:

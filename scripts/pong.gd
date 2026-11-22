@@ -1887,6 +1887,10 @@ func _style_button(button: Button, color: Color, emphasized: bool) -> void:
 
 
 func _build_sounds() -> void:
+	# O runner headless não tem saída de áudio. Evitar iniciar canais que
+	# deixam AudioStreamPlaybackWAV pendente ao encerrar os testes.
+	if DisplayServer.get_name() == "headless":
+		return
 	for config in [["paddle", 540.0, 0.065], ["wall", 350.0, 0.055], ["point", 210.0, 0.22], ["serve", 680.0, 0.075]]:
 		var player := AudioStreamPlayer.new()
 		player.stream = _make_tone(config[1], config[2])
