@@ -3,6 +3,8 @@ name: AAB Google Play
 on:
   push:
     branches: [main]
+  # Validar AAB antes do merge, com chave descartável e sem distribuir binários.
+  pull_request:
   workflow_dispatch:
 
 permissions:

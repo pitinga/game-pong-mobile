@@ -558,8 +558,7 @@ func _start_match() -> void:
 	_break_streak_on_abandon()
 	# Uma revogação recebida durante a partida anterior só entra na
 	# próxima partida; não mudar regras/raquetes em pleno rally.
-	state = GameState.MENU
-	_settle_pro_transition()
+	_settle_pro_transition(true)
 	_match_id += 1
 	_clear_touch_captures()
 	_interstitial_attempted_this_match = false
@@ -763,9 +762,8 @@ func set_interstitial_adapter(adapter: Node) -> void:
 	## show_interstitial(id) -> bool, cancel_interstitial(id) -> bool,
 	## recover_interstitial(id) -> bool [garantia nativa terminal],
 	## sinais interstitial_opened/impression/closed/failed(id).
-	## Só conectar ao terminar o SDK/consentimento; a Pro ignora o adaptador.
-	if is_pro and adapter != null:
-		return
+	## Só conectar ao terminar o SDK/consentimento. Com Pro ativo,
+	## não solicitar anúncios, mas conservar o adaptador para reembolso.
 	if _active_ad_request_id != -1:
 		if is_instance_valid(_interstitial_adapter) and not _interstitial_adapter.cancel_interstitial(_active_ad_request_id):
 			push_warning("Não é seguro substituir o adaptador durante uma exibição pendente.")
@@ -882,9 +880,6 @@ func _finish_ad_request(request_id: int) -> void:
 	_ad_recovery_needed = false
 	_ad_next_recovery_attempt_ticks = 0
 	_set_ad_buttons_busy(false)
-	if is_pro:
-		# Não interromper o anúncio já iniciado, mas não aceitar novos.
-		call_deferred("set_interstitial_adapter", null)
 	if _pending_pro_revocation and state not in [GameState.PLAYING, GameState.PAUSED]:
 		_settle_pro_transition()
 
@@ -1020,10 +1015,10 @@ func _load_cached_pro_entitlement() -> void:
 		is_pro = bool(config.get_value("purchase", "pro_owned", false))
 
 
-func _apply_pro_entitlement(owned: bool) -> void:
+func _apply_pro_entitlement(owned: bool, settle_between_matches: bool = false) -> void:
 	if owned:
 		_pending_pro_revocation = false
-	elif is_pro and (state in [GameState.PLAYING, GameState.PAUSED] or _active_ad_request_id != -1):
+	elif is_pro and ((state in [GameState.PLAYING, GameState.PAUSED] and not settle_between_matches) or _active_ad_request_id != -1):
 		# A titularidade já foi persistida como revogada. A experiência
 		# iniciada permanece íntegra até o menu/fechamento do anúncio.
 		_pending_pro_revocation = true
@@ -1042,8 +1037,8 @@ func _apply_pro_entitlement(owned: bool) -> void:
 				_load_pro_settings()
 				_load_pro_stats()
 				_sync_pro_controls()
-			if _active_ad_request_id == -1:
-				set_interstitial_adapter(null)
+			# Um adaptador existente fica conectado, mas Pro nunca solicita
+			# anúncios. Se houver reembolso, a versão Free o reutiliza.
 		else:
 			_pending_pro_revocation = false
 			_pending_pro_preferences = false
@@ -1061,12 +1056,12 @@ func _apply_pro_entitlement(owned: bool) -> void:
 	queue_redraw()
 
 
-func _settle_pro_transition() -> void:
+func _settle_pro_transition(between_matches: bool = false) -> void:
 	if _active_ad_request_id != -1:
 		return
 	if _pending_pro_revocation:
 		_pending_pro_revocation = false
-		_apply_pro_entitlement(false)
+		_apply_pro_entitlement(false, between_matches)
 	elif _pending_pro_preferences and is_pro:
 		_load_pro_settings()
 		_load_pro_stats()

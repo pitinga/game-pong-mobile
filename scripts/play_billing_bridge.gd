@@ -26,18 +26,24 @@ var _purchase_option_id := ""
 var _recent_purchase_deadline_msec := 0
 var _purchase_recheck_attempts := 0
 var _connection_retry_attempts := 0
+var _connecting := false
+var _awaiting_initial_details := false
 var _acknowledging: Dictionary = {}
 var _ack_retry_attempts: Dictionary = {}
 var _reconnect_timer := Timer.new()
+var _connect_timeout_timer := Timer.new()
+var _details_watchdog_timer := Timer.new()
 var _purchase_recheck_timer := Timer.new()
 var _ack_retry_timer := Timer.new()
 
 
 func _init() -> void:
-	for timer in [_reconnect_timer, _purchase_recheck_timer, _ack_retry_timer]:
+	for timer in [_reconnect_timer, _connect_timeout_timer, _details_watchdog_timer, _purchase_recheck_timer, _ack_retry_timer]:
 		timer.one_shot = true
 		add_child(timer)
 	_reconnect_timer.timeout.connect(_retry_connection)
+	_connect_timeout_timer.timeout.connect(_on_connect_timeout)
+	_details_watchdog_timer.timeout.connect(_restore_after_product_details)
 	_purchase_recheck_timer.timeout.connect(refresh)
 	_ack_retry_timer.timeout.connect(_retry_acknowledgements)
 
@@ -60,7 +66,22 @@ func start() -> void:
 		if _native.has_signal(connection[0]) and not _native.is_connected(connection[0], connection[1]):
 			_native.connect(connection[0], connection[1])
 	_connection_retry_attempts = 0
+	_connect()
+
+
+func _connect() -> void:
+	if _native == null or _connected or _connecting:
+		return
+	_connecting = true
 	_native.call("startConnection")
+	if is_inside_tree() and _connecting and not _connected:
+		_connect_timeout_timer.start(20.0)
+
+
+func _on_connect_timeout() -> void:
+	if _connecting and not _connected:
+		_connecting = false
+		_schedule_connection_retry()
 
 
 func refresh() -> void:
@@ -68,9 +89,10 @@ func refresh() -> void:
 		_native.call("queryPurchases", PRODUCT_INAPP, false)
 	elif _native != null:
 		# Também reabrir ao voltar do segundo plano, mesmo após esgotar os retries.
-		_reconnect_timer.stop()
-		_connection_retry_attempts = 0
-		_native.call("startConnection")
+		if not _connecting:
+			_reconnect_timer.stop()
+			_connection_retry_attempts = 0
+			_connect()
 	else:
 		purchase_message.emit("Google Play indisponível. Tente novamente com internet.")
 
@@ -86,14 +108,24 @@ func purchase() -> void:
 
 func _on_connected() -> void:
 	_connected = true
+	_connecting = false
+	_connect_timeout_timer.stop()
 	_connection_retry_attempts = 0
 	_reconnect_timer.stop()
+	_awaiting_initial_details = true
 	_native.call("queryProductDetails", PackedStringArray([PRODUCT_ID]), PRODUCT_INAPP)
-	refresh()
+	# Consultar preço e opções primeiro. Falha/ausência de resposta não pode
+	# impedir restauração: o watchdog consulta compras após 5 s.
+	if is_inside_tree() and _awaiting_initial_details:
+		_details_watchdog_timer.start(5.0)
 
 
 func _on_disconnected() -> void:
 	_connected = false
+	_connecting = false
+	_connect_timeout_timer.stop()
+	_awaiting_initial_details = false
+	_details_watchdog_timer.stop()
 	_product_available = false
 	_price = ""
 	availability_changed.emit(false)
@@ -119,11 +151,19 @@ func _schedule_connection_retry() -> void:
 
 
 func _retry_connection() -> void:
-	if _native != null and not _connected:
-		_native.call("startConnection")
+	_connect()
+
+
+func _restore_after_product_details() -> void:
+	if _awaiting_initial_details:
+		_awaiting_initial_details = false
+		refresh()
 
 
 func _on_product_details(response: Dictionary) -> void:
+	_details_watchdog_timer.stop()
+	var should_restore := _awaiting_initial_details
+	_awaiting_initial_details = false
 	_product_available = false
 	_price = ""
 	_purchase_option_id = ""
@@ -145,6 +185,10 @@ func _on_product_details(response: Dictionary) -> void:
 	price_changed.emit(_price)
 	if not _product_available:
 		purchase_message.emit("Preço do Pro indisponível nesta conta da Play Store.")
+	# A restauração é independente do cadastro/preço do produto e também
+	# deve funcionar quando queryProductDetails retorna um erro.
+	if should_restore:
+		refresh()
 
 
 func _on_purchases(response: Dictionary) -> void:
@@ -261,6 +305,8 @@ func _retry_acknowledgements() -> void:
 
 func _exit_tree() -> void:
 	_reconnect_timer.stop()
+	_connect_timeout_timer.stop()
+	_details_watchdog_timer.stop()
 	_purchase_recheck_timer.stop()
 	_ack_retry_timer.stop()
 	if _native != null:

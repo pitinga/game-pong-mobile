@@ -53,6 +53,26 @@ class FakeNative:
 		queries += 1
 
 
+class FakeInterstitial:
+	extends Node
+	signal interstitial_opened(request_id: int)
+	signal interstitial_impression(request_id: int)
+	signal interstitial_closed(request_id: int)
+	signal interstitial_failed(request_id: int)
+
+	func is_interstitial_loaded() -> bool:
+		return true
+
+	func show_interstitial(_request_id: int) -> bool:
+		return true
+
+	func cancel_interstitial(_request_id: int) -> bool:
+		return true
+
+	func recover_interstitial(_request_id: int) -> bool:
+		return true
+
+
 var failures := 0
 
 
@@ -170,6 +190,10 @@ func _run() -> void:
 	_check(reopened.state == GameScript.GameState.OTHER_GAMES and reopened._other_games_content.get_child_count() == 1, "Menu abre lista de instalação dos demais jogos")
 	reopened._return_to_menu()
 	_check(reopened.state == GameScript.GameState.MENU, "Lista de jogos volta ao menu")
+	var mock_ad := FakeInterstitial.new()
+	reopened.add_child(mock_ad)
+	reopened.set_interstitial_adapter(mock_ad)
+	_check(reopened._interstitial_adapter == mock_ad, "Adaptador permanece conectado com Pro, sem solicitar anúncios")
 	# O adaptador pode terminar um anúncio quando a Play confirmar e depois
 	# revogar a titularidade; nunca deixar o pedido assíncrono sem registro.
 	offline_fake.entitlement_checked.emit(false)
@@ -183,6 +207,7 @@ func _run() -> void:
 	_check(reopened._ad_policy._impressions_msec.size() == impressions_before + 1, "Impressão legítima já iniciada continua contabilizada durante Pro")
 	reopened._on_interstitial_closed(99)
 	_check(not reopened.is_pro and not reopened._pending_pro_revocation and reopened._active_ad_request_id == -1, "Fim do anúncio permite aplicar revogação pendente com segurança")
+	_check(reopened._interstitial_adapter == mock_ad, "Após revogação, Free reutiliza o adaptador sem reiniciar o aplicativo")
 	reopened.free()
 
 	var bridge := BillingBridge.new()
@@ -237,6 +262,24 @@ func _run() -> void:
 	_check(bridge._connection_retry_attempts == 2, "Erro de conexão aumenta recuo sem repetir callbacks em loop")
 	bridge.refresh()
 	_check(native.connections == 2 and bridge._connection_retry_attempts == 0, "Restaurar/retomar reconecta manualmente mesmo desconectado")
+	bridge.refresh()
+	_check(native.connections == 2, "Refresh repetido durante conexão não chama startConnection novamente")
+	var queries_before: int = native.queries
+	bridge._on_connected()
+	_check(native.queries == queries_before and bridge._awaiting_initial_details, "Conexão consulta detalhes do produto antes de consultar compras")
+	bridge._on_product_details({"response_code": 2})
+	_check(native.queries == queries_before + 1 and not bridge._awaiting_initial_details, "Erro ao obter preço não impede restauração de compra")
+	bridge._on_connected()
+	queries_before = native.queries
+	bridge._restore_after_product_details()
+	_check(native.queries == queries_before + 1 and not bridge._awaiting_initial_details, "Watchdog permite restaurar compra se detalhes não responderem")
+	bridge._on_product_details({"response_code": 2})
+	_check(native.queries == queries_before + 1, "Resposta atrasada de detalhes não duplica consulta de compras")
+	bridge._on_disconnected()
+	bridge._retry_connection()
+	var reconnects_before: int = native.connections
+	bridge._on_connect_timeout()
+	_check(native.connections == reconnects_before and not bridge._connecting and bridge._connection_retry_attempts == 2, "Conexão sem callback libera estado e programa retry limitado")
 	bridge._native = null
 	bridge.free()
 	native.free()

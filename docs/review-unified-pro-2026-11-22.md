@@ -35,3 +35,18 @@ Base revisada: `34847d784a95a4f59cbad4e0cfcb686b246bcaaa`, branch `feat/unified-
 ## Próximo passo
 
 Esperar o CI da atualização do PR #4, solicitar segunda revisão dos IDs acima e **não mesclar** antes de aceite. Depois, validar pagamento real e comportamento no Android com o produto `pro_unlock` configurado.
+
+## Segunda revisão (commit-base `773b6ae`)
+
+| Achado | Tratamento na rodada seguinte |
+|---|---|
+| M-3.1 | `_on_connected` solicita primeiro `queryProductDetails`; `_on_product_details` consulta compras mesmo em erro. Um watchdog de 5 s consulta compras se nenhum callback de detalhes chegar. Não sacrificar restauração de Pro por falta de preço. |
+| M-3.2 | Estruturas/nomes de campos confirmados **estaticamente nos bytecodes dos dois AARs v3.3.0**: `one_time_purchase_offer_details_list`, `formatted_price`, `purchase_option_id`, `offer_id` e `product_id`. Isso reduz o risco de chave inexistente, mas não substitui consultar um produto real no Android. |
+| B-3.3 | O adaptador de anúncios não é mais descartado ao conceder Pro; pedidos continuam proibidos enquanto `is_pro`, e revogação reutiliza o adaptador. Coberto com fake de anúncio nos testes. Nenhum SDK de anúncios real foi ativado. |
+| B-3.4 | Removida transição intermediária forçada `state = MENU` durante `_start_match`. `_settle_pro_transition(true)` aplica pendências exclusivamente entre partidas, sem acionar o menu. |
+| B-3.5 | Introduzido estado `_connecting` e watchdog de conexão de 20 s; `refresh()` não repete `startConnection` se houver tentativa ativa. Coberto por teste com fake nativo. |
+| B-3.6 | O commit upstream, a URL de release oficial, SHA-256 do ZIP de distribuição e hashes individuais dos AARs constam no README. A validação `sha256sum -c` confirma integridade dos arquivos versionados, **não autentica a origem** por si só. O ZIP foi baixado do release oficial na integração inicial; nesta rodada não foi feito novo download independente. |
+
+**Risco P3-10:** esta PR prepara a versão de desenvolvimento sem faturamento ativo. A verificação apenas no cliente, com cache adulterável, é uma escolha de escopo **provisória para 0.4.0**, não afirmação de segurança antifraude. Antes de habilitar compras reais, o proprietário deverá aceitar expressamente essa limitação ou solicitar verificação em servidor.
+
+**Condição de CI para merge:** o workflow de AAB passou a rodar também em `pull_request` (chave descartável, nenhum artefato distribuído). O resultado real do job AAB deve ser confirmado antes do merge.

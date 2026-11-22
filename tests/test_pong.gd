@@ -452,7 +452,10 @@ func _run_tests() -> void:
 	pro_fake_ad.game = real_pro
 	real_pro.add_child(pro_fake_ad)
 	real_pro.set_interstitial_adapter(pro_fake_ad)
-	_check(real_pro._interstitial_adapter == null, "Pro rejeita adaptador e não ativa SDK de publicidade")
+	real_pro._start_match()
+	real_pro._complete_match(true)
+	await process_frame
+	_check(real_pro._interstitial_adapter == pro_fake_ad and pro_fake_ad.show_calls == 0, "Pro preserva adaptador para eventual reembolso, mas nunca solicita anúncio")
 	_check(real_pro._stats["best_survival"] == 1, "Nova instância Pro carrega estatísticas do teste isolado")
 	var pro_menu_panel := real_pro._menu.get_child(0) as PanelContainer
 	_check(pro_menu_panel.get_combined_minimum_size().y <= 530.0, "Menu Pro cabe no celular em paisagem")
