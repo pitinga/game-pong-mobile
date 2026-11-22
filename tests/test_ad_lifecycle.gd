@@ -25,9 +25,13 @@ class DelayedInterstitial:
 	var cancel_calls: Array[int] = []
 	var recovery_calls: Array[int] = []
 	var safe_recovery := false
+	var ads_allowed := false
+
+	func set_ads_allowed(allowed: bool) -> void:
+		ads_allowed = allowed
 
 	func is_interstitial_loaded() -> bool:
-		return loaded
+		return loaded and ads_allowed
 
 	func show_interstitial(request_id: int = -1) -> bool:
 		requests.append(request_id)
@@ -63,12 +67,18 @@ func _check(ok: bool, label: String) -> void:
 func _run() -> void:
 	root.size = Vector2i(960, 540)
 	var ads_file := "user://pong_async_%d_%d_%d.cfg" % [OS.get_process_id(), int(Time.get_unix_time_from_system() * 1000000.0), randi()]
-	if FileAccess.file_exists(ads_file):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(ads_file))
+	var purchase_file := ads_file.replace(".cfg", "_purchase.cfg")
+	for path in [ads_file, purchase_file]:
+		for suffix in ["", ".bak", ".tmp"]:
+			if FileAccess.file_exists(path + suffix):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(path + suffix))
 	var game: Control = load("res://scenes/main.tscn").instantiate()
 	game.ad_policy_file = ads_file
+	game.pro_entitlement_file = purchase_file
 	root.add_child(game)
 	await process_frame
+	game._on_entitlement_checked(false)
+	game.set_ad_consent_granted(true)
 	var mock := DelayedInterstitial.new()
 	game.add_child(mock)
 	game.set_interstitial_adapter(mock)

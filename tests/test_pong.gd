@@ -17,9 +17,13 @@ class FakeInterstitialAdapter:
 	var state_when_shown := -1
 	var active_request_id := -1
 	var game: Control
+	var ads_allowed := false
+
+	func set_ads_allowed(allowed: bool) -> void:
+		ads_allowed = allowed
 
 	func is_interstitial_loaded() -> bool:
-		return loaded
+		return loaded and ads_allowed
 
 	func show_interstitial(request_id: int) -> bool:
 		active_request_id = request_id
@@ -123,7 +127,8 @@ func _run_tests() -> void:
 	var test_settings_file := "user://pong_tests_%s_settings.cfg" % test_token
 	var test_stats_file := "user://pong_tests_%s_stats.cfg" % test_token
 	var test_ads_file := "user://pong_tests_%s_ads.cfg" % test_token
-	for test_file in [test_settings_file, test_stats_file, test_ads_file]:
+	var test_entitlement_file := "user://pong_tests_%s_entitlement.cfg" % test_token
+	for test_file in [test_settings_file, test_stats_file, test_ads_file, test_entitlement_file]:
 		for suffix in ["", ".bak", ".tmp"]:
 			var candidate: String = test_file + suffix
 			if FileAccess.file_exists(candidate):
@@ -132,6 +137,7 @@ func _run_tests() -> void:
 	game.settings_file = test_settings_file
 	game.stats_file = test_stats_file
 	game.ad_policy_file = test_ads_file
+	game.pro_entitlement_file = test_entitlement_file
 	root.add_child(game)
 	await process_frame
 
@@ -299,10 +305,13 @@ func _run_tests() -> void:
 
 	# Integração de evento real de fim de partida com adaptador injetável.
 	# Não carrega SDK, faz solicitações à rede nem usa identificadores reais.
+	game._on_entitlement_checked(false)
+	game.set_ad_consent_granted(true)
 	var fake_ad := FakeInterstitialAdapter.new()
 	fake_ad.game = game
 	game.add_child(fake_ad)
 	game.set_interstitial_adapter(fake_ad)
+	_check(fake_ad.ads_allowed, "Adaptador só recebe autorização após Free confirmado e consentimento")
 	game._ad_policy = AdPolicy.new()
 	for match_number in range(3):
 		_finish_free_match(game)
@@ -362,6 +371,7 @@ func _run_tests() -> void:
 	game.is_pro = true
 	game.settings_file = test_settings_file
 	game.stats_file = test_stats_file
+	game.pro_entitlement_file = test_entitlement_file
 	root.add_child(game)
 	await process_frame
 	_check(game._stats["played"] == 0 and game._stats["best_survival"] == 0, "Pro começa com estatísticas de teste vazias")
@@ -445,6 +455,7 @@ func _run_tests() -> void:
 	real_pro.is_pro = true
 	real_pro.settings_file = test_settings_file
 	real_pro.stats_file = test_stats_file
+	real_pro.pro_entitlement_file = test_entitlement_file
 	root.add_child(real_pro)
 	await process_frame
 	_check(real_pro.is_pro and real_pro._pro_button != null and not real_pro._pro_button.visible and real_pro._pro_row.visible, "Menu Pro troca compra interna pelos recursos adquiridos")
@@ -474,7 +485,7 @@ func _run_tests() -> void:
 	migrated_game._load_pro_stats()
 	_check(migrated_game._stats["survival_matches"] == 1 and migrated_game._stats["played"] == 3, "Pro migra totais antigos sem perder as partidas de sobrevivência")
 	migrated_game.free()
-	for test_file in [test_settings_file, test_stats_file, test_ads_file]:
+	for test_file in [test_settings_file, test_stats_file, test_ads_file, test_entitlement_file]:
 		for suffix in ["", ".bak", ".tmp"]:
 			var candidate: String = test_file + suffix
 			if FileAccess.file_exists(candidate):

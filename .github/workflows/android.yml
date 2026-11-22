@@ -60,6 +60,7 @@ jobs:
           godot --headless --path . --script res://tests/test_sweep_geometry.gd
           godot --headless --path . --script res://tests/test_storage_recovery.gd
           godot --headless --path . --script res://tests/test_pro_billing.gd
+          godot --headless --path . --script res://tests/test_pro_ad_safety.gd
 
       - name: Configurar exportador Android do Godot
         shell: bash

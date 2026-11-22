@@ -10,6 +10,7 @@ class FakeBilling:
 	signal availability_changed(available: bool)
 	signal purchase_message(message: String)
 	signal price_changed(formatted_price: String)
+	signal purchase_pending(pending: bool)
 	var starts := 0
 	var purchases := 0
 	var queries := 0
@@ -59,9 +60,16 @@ class FakeInterstitial:
 	signal interstitial_impression(request_id: int)
 	signal interstitial_closed(request_id: int)
 	signal interstitial_failed(request_id: int)
+	var ads_allowed := false
+	var preload_permissions := 0
+
+	func set_ads_allowed(allowed: bool) -> void:
+		ads_allowed = allowed
+		if allowed:
+			preload_permissions += 1
 
 	func is_interstitial_loaded() -> bool:
-		return true
+		return ads_allowed
 
 	func show_interstitial(_request_id: int) -> bool:
 		return true
@@ -86,6 +94,16 @@ func _check(ok: bool, label: String) -> void:
 	else:
 		failures += 1
 		push_error("FALHOU - " + label)
+
+
+func _confirm_refund_after_grace(game: Control, fake: FakeBilling) -> void:
+	# Simula a primeira negativa recebida há 49h e uma nova verificação
+	# válida, em outro dia, sem esperar o relógio real do sistema.
+	var now := int(Time.get_unix_time_from_system())
+	game._negative_first_unix = now - game.PRO_REVOKE_GRACE_SEC - 3600
+	game._negative_last_unix = now - game.PRO_NEGATIVE_INTERVAL_SEC - 3600
+	game._negative_count = 1
+	fake.entitlement_checked.emit(false)
 
 
 func _run() -> void:
@@ -113,10 +131,15 @@ func _run() -> void:
 	fake.price_changed.emit("R$ 4,99")
 	_check("R$ 4,99" in game._pro_button.text, "Menu exibe preço localizado antes da abertura da Play Store")
 	_check((game._menu.get_child(0) as PanelContainer).get_combined_minimum_size().y <= 530.0, "Menu Free completo com preço cabe em 530 px")
+	_check(game.entitlement_status == GameScript.EntitlementStatus.UNKNOWN and game._pro_button.disabled, "Sem consulta positiva ou negativa da Play, compra e anúncios aguardam verificação")
+	fake.entitlement_checked.emit(false)
 	game._buy_pro()
 	_check(fake.purchases == 1 and not game.is_pro, "Tocar em comprar apenas abre fluxo externo: não libera Pro")
+	fake.purchase_pending.emit(true)
 	fake.purchase_message.emit("Compra pendente")
-	_check(not game.is_pro and game._pro_status_label.text == "Compra pendente", "Compra pendente mantém recursos bloqueados")
+	_check(not game.is_pro and game.entitlement_status == GameScript.EntitlementStatus.PENDING and game._pro_status_label.text.contains("ANÁLISE"), "Compra pendente mantém recursos bloqueados e suprime anúncios")
+	fake.purchase_pending.emit(false)
+	fake.entitlement_checked.emit(false)
 	game._restore_purchase()
 	_check(fake.queries == 1, "Restaurar consulta compras no adaptador")
 	fake.entitlement_checked.emit(true)
@@ -145,7 +168,11 @@ func _run() -> void:
 	offline_fake.purchase_message.emit("Sem conexão")
 	_check(reopened.is_pro, "Falha de rede não remove compra confirmada nem faz anúncios voltarem")
 	offline_fake.entitlement_checked.emit(false)
-	_check(not reopened.is_pro and reopened.match_mode == GameScript.MatchMode.CLASSIC and is_equal_approx(reopened.ball_scale, 1.0), "Consulta Play válida sem titularidade revoga recursos e volta a regras Free")
+	_check(reopened.is_pro and reopened.entitlement_status == GameScript.EntitlementStatus.PRO and reopened._negative_count == 1, "Uma negativa para dono antigo mantém Pro e inicia histórico de verificação")
+	saved = ConfigFile.new()
+	_check(saved.load(purchase_file) == OK and saved.get_value("purchase", "pro_owned", false) and saved.get_value("purchase", "negative_count", 0) == 1, "Cache Pro persiste contador de negativas, sem revogação prematura")
+	_confirm_refund_after_grace(reopened, offline_fake)
+	_check(not reopened.is_pro and reopened.match_mode == GameScript.MatchMode.CLASSIC and is_equal_approx(reopened.ball_scale, 1.0), "Duas negativas em dias diferentes após 48h permitem revogação legítima")
 	saved = ConfigFile.new()
 	_check(saved.load(purchase_file) == OK and not saved.get_value("purchase", "pro_owned", true), "Revogação confirmada também atualiza cache")
 	# A mesma conta pode recuperar depois da reinstalação sem nova compra.
@@ -156,6 +183,7 @@ func _run() -> void:
 	reopened._set_ball_size(150.0)
 	reopened._start_match()
 	offline_fake.entitlement_checked.emit(false)
+	_confirm_refund_after_grace(reopened, offline_fake)
 	_check(reopened.is_pro and reopened._pending_pro_revocation and reopened.match_mode == GameScript.MatchMode.TWO_PLAYERS and is_equal_approx(reopened.ball_scale, 1.5), "Revogação em partida local mantém modo e geometria até o fim")
 	reopened._return_to_menu()
 	_check(not reopened.is_pro and not reopened._pending_pro_revocation and reopened.match_mode == GameScript.MatchMode.CLASSIC and is_equal_approx(reopened.ball_scale, 1.0), "Ao retornar ao menu, revogação bloqueia Pro e volta ao padrão Free")
@@ -163,6 +191,7 @@ func _run() -> void:
 	offline_fake.entitlement_checked.emit(true)
 	reopened._start_match()
 	offline_fake.entitlement_checked.emit(false)
+	_confirm_refund_after_grace(reopened, offline_fake)
 	reopened._start_match()
 	_check(not reopened.is_pro and reopened.match_mode == GameScript.MatchMode.CLASSIC and reopened.state == GameScript.GameState.PLAYING, "Reiniciar partida aplica revogação antes de criar a próxima")
 	reopened._return_to_menu()
@@ -201,6 +230,7 @@ func _run() -> void:
 	reopened._active_ad_request_id = 99
 	offline_fake.entitlement_checked.emit(true)
 	offline_fake.entitlement_checked.emit(false)
+	_confirm_refund_after_grace(reopened, offline_fake)
 	_check(reopened.is_pro and reopened._pending_pro_revocation and reopened._active_ad_request_id == 99, "Revogação não interrompe anúncio iniciado nem altera o direito até encerrá-lo")
 	var impressions_before: int = reopened._ad_policy._impressions_msec.size()
 	reopened._on_interstitial_impression(99)
@@ -219,20 +249,23 @@ func _run() -> void:
 	bridge._on_product_details({"response_code": 0, "product_details": [{"product_id": "outro_item"}]})
 	_check(not bridge._product_available, "Outro produto da loja não habilita compra Pro")
 	bridge._on_product_details({"response_code": 0, "product_details": [{"product_id": "pro_unlock", "one_time_purchase_offer_details_list": [{"offer_id": "", "purchase_option_id": "base", "formatted_price": "R$ 4,99"}]}]})
+	var pending_events: Array[bool] = []
+	bridge.purchase_pending.connect(func(pending: bool): pending_events.append(pending))
 	bridge.purchase()
-	_check(native.launches == 1 and native.last_option_id == "base" and bridge._price == "R$ 4,99", "Compra usa opção e preço localizados retornados pelo Google Play")
+	_check(native.launches == 1 and native.last_option_id == "base" and bridge._price == "R$ 4,99" and pending_events.back(), "Compra usa preço localizado e bloqueia anúncios durante o checkout")
 	var bought := {"product_ids": PackedStringArray(["pro_unlock"]), "purchase_state": 1,
 		"purchase_token": "token-fake", "is_acknowledged": false}
 	var delivered: Array[bool] = []
 	bridge.entitlement_checked.connect(func(owned: bool): delivered.append(owned))
 	bridge._on_purchase_updated({"response_code": 1})
-	_check(delivered.is_empty(), "Cancelamento da compra não libera Pro")
+	_check(delivered.is_empty() and not pending_events.back(), "Cancelamento da compra não libera Pro nem deixa pendência ativa")
 	bridge._on_purchase_updated({"response_code": 0, "purchases": [{"product_ids": ["outro_item"], "purchase_state": 1}]})
 	_check(delivered.is_empty(), "Callback de produto diferente não libera Pro")
 	bridge._on_purchases({"response_code": 0, "purchases": [{"product_ids": ["pro_unlock"], "purchase_state": 2}]})
-	_check(delivered.is_empty(), "Compra pendente não concede nem remove Pro")
+	_check(delivered.is_empty() and pending_events.back(), "Compra pendente não concede nem remove Pro e informa estado pendente")
+	var queries_before_purchase: int = native.queries
 	bridge._on_purchase_updated({"response_code": 0, "purchases": [bought]})
-	_check(delivered.size() == 1 and delivered[0] and native.acknowledges == ["token-fake"] and native.queries == 1, "Compra concluída desbloqueia, reconhece sem consumo e consulta a Play")
+	_check(delivered.size() == 1 and delivered[0] and native.acknowledges == ["token-fake"] and native.queries == queries_before_purchase + 1 and not pending_events.back(), "Compra concluída desbloqueia, reconhece sem consumo e limpa pendência")
 	bridge._on_purchase_updated({"response_code": 0, "purchases": [bought]})
 	_check(native.acknowledges.size() == 1, "Callback duplicado não reconhece o mesmo token duas vezes")
 	bridge._on_acknowledged({"response_code": 2, "token": "token-fake"})

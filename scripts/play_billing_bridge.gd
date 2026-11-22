@@ -6,6 +6,7 @@ signal entitlement_checked(owned: bool)
 signal availability_changed(available: bool)
 signal purchase_message(message: String)
 signal price_changed(formatted_price: String)
+signal purchase_pending(pending: bool)
 
 const PRODUCT_ID := "pro_unlock"
 const RESPONSE_OK := 0
@@ -28,6 +29,7 @@ var _purchase_recheck_attempts := 0
 var _connection_retry_attempts := 0
 var _connecting := false
 var _awaiting_initial_details := false
+var _pending_purchase := false
 var _acknowledging: Dictionary = {}
 var _ack_retry_attempts: Dictionary = {}
 var _reconnect_timer := Timer.new()
@@ -101,9 +103,18 @@ func purchase() -> void:
 	if not _connected or not _product_available or _native == null:
 		purchase_message.emit("Compra indisponível. Verifique a Play Store e tente novamente.")
 		return
+	_set_purchase_pending(true)
 	var result: Dictionary = _native.call("purchase", PRODUCT_ID, _purchase_option_id, "", false)
 	if int(result.get("response_code", -1)) != RESPONSE_OK:
+		_set_purchase_pending(false)
 		purchase_message.emit("Não foi possível abrir a compra. Tente novamente.")
+
+
+func _set_purchase_pending(pending: bool) -> void:
+	if _pending_purchase == pending:
+		return
+	_pending_purchase = pending
+	purchase_pending.emit(pending)
 
 
 func _on_connected() -> void:
@@ -207,8 +218,10 @@ func _on_purchases(response: Dictionary) -> void:
 		elif int(purchase.get("purchase_state", -1)) == PENDING:
 			pending = true
 	if pending and not owned:
+		_set_purchase_pending(true)
 		purchase_message.emit("Compra pendente de aprovação no Google Play.")
 		return
+	_set_purchase_pending(false)
 	# Consultas iniciadas antes da compra e atrasos de propagação da Play
 	# podem retornar vazias após PURCHASED. Manter o direito por até 5 min
 	# enquanto rechecamos; depois disso uma consulta OK sem compra revoga.
@@ -221,18 +234,24 @@ func _on_purchases(response: Dictionary) -> void:
 	entitlement_checked.emit(owned)
 	if owned:
 		purchase_message.emit("Pro restaurado: anúncios desativados.")
+	else:
+		purchase_message.emit("Pro não encontrado nesta conta Google da Play Store. Se já comprou, selecione a conta usada na compra e toque em RESTAURAR; procure o suporte se persistir.")
 
 
 func _on_purchase_updated(response: Dictionary) -> void:
 	var code := int(response.get("response_code", -1))
 	if code == RESPONSE_CANCELED:
+		_set_purchase_pending(false)
 		purchase_message.emit("Compra cancelada.")
+		refresh()
 		return
 	if code == RESPONSE_ALREADY_OWNED:
 		refresh()
 		return
 	if code != RESPONSE_OK:
+		_set_purchase_pending(false)
 		purchase_message.emit("Compra não concluída. Tente novamente.")
+		refresh()
 		return
 	var pending := false
 	for purchase_data in response.get("purchases", []):
@@ -240,6 +259,7 @@ func _on_purchase_updated(response: Dictionary) -> void:
 		if not PRODUCT_ID in purchase.get("product_ids", []):
 			continue
 		if int(purchase.get("purchase_state", -1)) == PURCHASED:
+			_set_purchase_pending(false)
 			_acknowledge_if_needed(purchase)
 			_recent_purchase_deadline_msec = Time.get_ticks_msec() + PURCHASE_SETTLE_MSEC
 			_purchase_recheck_attempts = 0
@@ -249,6 +269,7 @@ func _on_purchase_updated(response: Dictionary) -> void:
 		elif int(purchase.get("purchase_state", -1)) == PENDING:
 			pending = true
 	if pending:
+		_set_purchase_pending(true)
 		purchase_message.emit("Compra pendente de aprovação no Google Play.")
 
 

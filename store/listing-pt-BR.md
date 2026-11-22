@@ -34,6 +34,7 @@ Recursos:
 - Desbloqueio Pro permanente, dentro do próprio aplicativo, para jogar sem anúncios.
 - No Pro: Sobrevivência, dois jogadores locais, temas, tamanhos da bola e das raquetes e estatísticas.
 - Sem necessidade de cadastro no jogo; a compra é gerenciada pela Google Play.
+- Uma compra Pro existente pode ser recuperada pelo botão Restaurar, com a mesma conta Google utilizada na compra.
 
 Escolha a dificuldade, ajuste sua estratégia e desafie o computador!
 
@@ -47,7 +48,7 @@ Uma única versão Android: gratuito + desbloqueio Pro por compra no aplicativo.
 - Publicidade: **ainda não ativada**; configurar AdMob e revisar as declarações de conteúdo antes de publicar uma versão com anúncios.
 - Compras no aplicativo: **sim**, desbloqueio Pro permanente pela Google Play Billing. Configurar produto não consumível antes de disponibilizar a compra.
 - Login ou conta de jogador: **não**.
-- Contagem local agregada de partidas: **sim**, apenas para limitar publicidade. Preferências Pro, estatísticas e última titularidade confirmada são armazenadas localmente.
+- Contagem local agregada de partidas: **sim**, apenas para limitar publicidade. Preferências Pro, estatísticas, última titularidade confirmada e datas/quantidade de verificações negativas são armazenadas localmente.
 - Pagamentos: processados pela Google Play. Consultar e revisar as declarações de tratamento do SDK e da plataforma antes da publicação.
 - Política de privacidade: `docs/privacy-policy.html` (publicar em URL pública antes do envio).
 
@@ -62,6 +63,7 @@ Uma única versão Android: gratuito + desbloqueio Pro por compra no aplicativo.
 - Confirmar o identificador definitivo `com.pitinga.pongmobile` e que o app será gratuito.
 - Criar produto interno **não consumível** `pro_unlock` no mesmo aplicativo, ativar e testar compra, pendência, restauração, atualização e reembolso. Usar somente licenças de teste na validação inicial.
 - Validar o plugin **GodotGooglePlayBilling 3.3.0** em um Android com Google Play e configurar o produto para habilitar a compra.
+- Explicar no suporte: usar a **mesma conta Google** da compra e tocar em **Restaurar**; após reinstalação sem cache e offline pode ser necessário conectar-se. Uma consulta vazia isolada mantém Pro previamente confirmado, mas reembolso legítimo deve revogar o direito depois da carência.
 - Integrar o SDK AdMob ao aplicativo único, respeitando o direito Pro para não solicitar anúncios; configurar consentimento, testar IDs de teste e ativar IDs reais somente na publicação monetizada.
 - Ativar links "Conheça nossos jogos" apenas para aplicativos já publicados na Play Store.
 - Definir o e-mail público de suporte no Play Console.

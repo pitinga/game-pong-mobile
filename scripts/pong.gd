@@ -4,6 +4,7 @@ extends Control
 enum GameState { MENU, PLAYING, PAUSED, FINISHED, PRIVACY, SETTINGS, STATS, OTHER_GAMES }
 enum MatchMode { CLASSIC, SURVIVAL, TWO_PLAYERS }
 enum InterstitialState { IDLE, REQUESTED, SHOWING }
+enum EntitlementStatus { UNKNOWN, FREE_CONFIRMED, PRO, PENDING }
 
 const AdPolicy = preload("res://scripts/ad_policy.gd")
 const PlayBillingBridge = preload("res://scripts/play_billing_bridge.gd")
@@ -11,6 +12,8 @@ const SETTINGS_FILE := "user://pong_pro_settings.cfg"
 const STATS_FILE := "user://pong_pro_stats.cfg"
 const AD_POLICY_FILE := "user://pong_free_ad_policy.cfg"
 const PRO_ENTITLEMENT_FILE := "user://pong_pro_entitlement.cfg"
+const PRO_REVOKE_GRACE_SEC := 48 * 60 * 60
+const PRO_NEGATIVE_INTERVAL_SEC := 24 * 60 * 60
 # Adicionar URL da Play Store somente após o título estar publicado. Nunca
 # oferecer links de instalação para apps inexistentes ou para este próprio jogo.
 const RELEASED_GAME_CATALOG := []
@@ -51,6 +54,7 @@ const THEMES := [
 ]
 
 var is_pro := false
+var entitlement_status: EntitlementStatus = EntitlementStatus.UNKNOWN
 # Caminhos substituiveis nos testes: nunca gravar nas preferencias reais.
 var settings_file := SETTINGS_FILE
 var stats_file := STATS_FILE
@@ -79,6 +83,12 @@ var _billing_adapter: Node
 var _billing_purchase_available := false
 var _billing_status := "Compras disponíveis quando o Google Play estiver configurado."
 var _pro_price := ""
+var _cached_pro_owned := false
+var _last_positive_unix := 0
+var _negative_first_unix := 0
+var _negative_last_unix := 0
+var _negative_count := 0
+var _ads_consent_granted := false
 var _pending_pro_preferences := false
 var _pending_pro_revocation := false
 var _interstitial_attempted_this_match := false
@@ -140,6 +150,7 @@ var _pro_button: Button
 var _restore_purchase_button: Button
 var _pro_row: HBoxContainer
 var _pro_status_label: Label
+var _menu_content: VBoxContainer
 var _edition_title: Label
 var _edition_subtitle: Label
 var _features_label: Label
@@ -746,21 +757,39 @@ func _complete_match(won: bool) -> void:
 		_finish_score.text = "%02d   :   %02d" % [player_score, cpu_score]
 	if is_pro:
 		_record_pro_stats(won)
-	else:
+	elif entitlement_status == EntitlementStatus.FREE_CONFIRMED:
 		_ad_policy.note_finished_match()
 		if _ad_policy.save_state(ad_policy_file) != OK:
 			push_warning("Não foi possível guardar o limite local de anúncios.")
 	_show_interface()
 	queue_redraw()
-	if not is_pro:
+	if _ads_allowed_now():
 		# Oportunidade exclusiva de transição: após o placar final aparecer.
 		call_deferred("_try_show_interstitial_after_match", _match_id)
+
+
+func set_ad_consent_granted(granted: bool) -> void:
+	## O SDK/gerenciador de consentimento futuro deve chamar isto depois da
+	## autorização real. A política começa SEM consentimento por segurança.
+	_ads_consent_granted = granted
+	_refresh_ads_allowed()
+
+
+func _ads_allowed_now() -> bool:
+	return entitlement_status == EntitlementStatus.FREE_CONFIRMED and not is_pro and _ads_consent_granted
+
+
+func _refresh_ads_allowed() -> void:
+	if is_instance_valid(_interstitial_adapter):
+		_interstitial_adapter.set_ads_allowed(_ads_allowed_now())
 
 
 func set_interstitial_adapter(adapter: Node) -> void:
 	## Contrato do adaptador: is_interstitial_loaded() -> bool,
 	## show_interstitial(id) -> bool, cancel_interstitial(id) -> bool,
 	## recover_interstitial(id) -> bool [garantia nativa terminal],
+	## set_ads_allowed(bool) proíbe INCLUSIVE pré-carregamento sem
+	## titularidade Free confirmada na sessão e consentimento explícito,
 	## sinais interstitial_opened/impression/closed/failed(id).
 	## Só conectar ao terminar o SDK/consentimento. Com Pro ativo,
 	## não solicitar anúncios, mas conservar o adaptador para reembolso.
@@ -771,6 +800,7 @@ func set_interstitial_adapter(adapter: Node) -> void:
 		_mark_ad_request_canceled(_active_ad_request_id)
 		_finish_ad_request(_active_ad_request_id)
 	if is_instance_valid(_interstitial_adapter):
+		_interstitial_adapter.set_ads_allowed(false)
 		for connection in [
 			["interstitial_opened", Callable(self, "_on_interstitial_opened")],
 			["interstitial_impression", Callable(self, "_on_interstitial_impression")],
@@ -785,10 +815,12 @@ func set_interstitial_adapter(adapter: Node) -> void:
 	if not adapter.has_signal("interstitial_opened") or not adapter.has_signal("interstitial_impression") \
 			or not adapter.has_signal("interstitial_closed") or not adapter.has_signal("interstitial_failed") \
 			or not adapter.has_method("is_interstitial_loaded") or not adapter.has_method("show_interstitial") \
-			or not adapter.has_method("cancel_interstitial") or not adapter.has_method("recover_interstitial"):
+			or not adapter.has_method("cancel_interstitial") or not adapter.has_method("recover_interstitial") \
+			or not adapter.has_method("set_ads_allowed"):
 		push_warning("Adaptador de intersticiais inválido; publicidade desativada.")
 		return
 	_interstitial_adapter = adapter
+	_interstitial_adapter.set_ads_allowed(_ads_allowed_now())
 	_interstitial_adapter.interstitial_opened.connect(_on_interstitial_opened)
 	_interstitial_adapter.interstitial_impression.connect(_on_interstitial_impression)
 	_interstitial_adapter.interstitial_closed.connect(_on_interstitial_closed)
@@ -797,7 +829,7 @@ func set_interstitial_adapter(adapter: Node) -> void:
 
 func _try_show_interstitial_after_match(match_id: int = -1) -> void:
 	# Nunca iniciar anúncio durante a partida, em pausa ou no menu.
-	if is_pro or state != GameState.FINISHED or _interstitial_attempted_this_match \
+	if not _ads_allowed_now() or state != GameState.FINISHED or _interstitial_attempted_this_match \
 			or _active_ad_request_id != -1 or (match_id >= 0 and match_id != _match_id):
 		return
 	if not is_instance_valid(_interstitial_adapter):
@@ -966,6 +998,7 @@ func set_billing_adapter(adapter: Node) -> void:
 	if is_instance_valid(_billing_adapter):
 		for connection in [
 			["entitlement_checked", Callable(self, "_on_entitlement_checked")],
+			["purchase_pending", Callable(self, "_on_purchase_pending")],
 			["availability_changed", Callable(self, "_on_billing_availability")],
 			["purchase_message", Callable(self, "_on_billing_message")],
 			["price_changed", Callable(self, "_on_pro_price_changed")],
@@ -989,6 +1022,8 @@ func set_billing_adapter(adapter: Node) -> void:
 	if adapter.get_parent() == null:
 		add_child(adapter)
 	adapter.entitlement_checked.connect(_on_entitlement_checked)
+	if adapter.has_signal("purchase_pending"):
+		adapter.purchase_pending.connect(_on_purchase_pending)
 	adapter.availability_changed.connect(_on_billing_availability)
 	adapter.purchase_message.connect(_on_billing_message)
 	if adapter.has_signal("price_changed"):
@@ -997,22 +1032,79 @@ func set_billing_adapter(adapter: Node) -> void:
 	adapter.start()
 
 
-func _on_entitlement_checked(owned: bool) -> void:
-	# Somente um retorno bem-sucedido da Play Store substitui o último estado
-	# confirmado. Falha de rede não remove uma compra legítima.
+func _save_pro_entitlement_cache() -> void:
 	var config := ConfigFile.new()
-	config.set_value("purchase", "pro_owned", owned)
+	config.set_value("purchase", "pro_owned", _cached_pro_owned)
+	config.set_value("purchase", "last_positive_unix", _last_positive_unix)
+	config.set_value("purchase", "negative_first_unix", _negative_first_unix)
+	config.set_value("purchase", "negative_last_unix", _negative_last_unix)
+	config.set_value("purchase", "negative_count", _negative_count)
 	if _save_config_with_backup(config, pro_entitlement_file) != OK:
-		push_warning("Não foi possível armazenar a última confirmação Pro.")
-	_apply_pro_entitlement(owned)
+		push_warning("Não foi possível armazenar o estado de confirmação Pro.")
+
+
+func _on_entitlement_checked(owned: bool) -> void:
+	# Uma resposta negativa isolada não apaga uma compra previamente
+	# confirmada. Exigir 2 negativas separadas por >=24h e pelo menos 48h
+	# desde a primeira, preservando o histórico entre sessões.
+	var now := int(Time.get_unix_time_from_system())
+	if owned:
+		_cached_pro_owned = true
+		_last_positive_unix = now
+		_negative_first_unix = 0
+		_negative_last_unix = 0
+		_negative_count = 0
+		entitlement_status = EntitlementStatus.PRO
+		_save_pro_entitlement_cache()
+		_apply_pro_entitlement(true)
+		return
+	if _cached_pro_owned:
+		if _negative_first_unix <= 0 or now < _negative_first_unix:
+			_negative_first_unix = now
+			_negative_last_unix = now
+			_negative_count = 1
+		elif now - _negative_last_unix >= PRO_NEGATIVE_INTERVAL_SEC:
+			_negative_count = mini(_negative_count + 1, 100)
+			_negative_last_unix = now
+		if _negative_count < 2 or now - _negative_first_unix < PRO_REVOKE_GRACE_SEC:
+			entitlement_status = EntitlementStatus.PRO
+			_save_pro_entitlement_cache()
+			_billing_status = "PRO MANTIDO: confira a conta Google da compra ou toque RESTAURAR."
+			_refresh_ads_allowed()
+			_update_pro_ui()
+			return
+	# Revogação confirmada depois da carência, ou instalação Free que nunca
+	# teve Pro. Só agora a sessão está confirmada como sem compra.
+	_cached_pro_owned = false
+	entitlement_status = EntitlementStatus.FREE_CONFIRMED
+	_save_pro_entitlement_cache()
+	_apply_pro_entitlement(false)
 
 
 func _load_cached_pro_entitlement() -> void:
 	# Cache para evitar que os anúncios voltem durante uma queda da Play Store.
-	# A consulta remota prevalece quando houver resposta bem-sucedida.
+	# Mesmo um cache Free NÃO autoriza anúncios: exige verificação nesta sessão.
 	var config := _load_config_with_backup(pro_entitlement_file)
 	if config != null:
-		is_pro = bool(config.get_value("purchase", "pro_owned", false))
+		_cached_pro_owned = bool(config.get_value("purchase", "pro_owned", false))
+		_last_positive_unix = maxi(0, int(config.get_value("purchase", "last_positive_unix", 0)))
+		_negative_first_unix = maxi(0, int(config.get_value("purchase", "negative_first_unix", 0)))
+		_negative_last_unix = maxi(0, int(config.get_value("purchase", "negative_last_unix", 0)))
+		_negative_count = clampi(int(config.get_value("purchase", "negative_count", 0)), 0, 100)
+		is_pro = _cached_pro_owned
+	entitlement_status = EntitlementStatus.PRO if is_pro else EntitlementStatus.UNKNOWN
+	_refresh_ads_allowed()
+
+
+func _on_purchase_pending(pending: bool) -> void:
+	# Uma compra ainda não aprovada não libera funcionalidades, mas suprime
+	# qualquer carga ou impressão publicitária até uma resposta definitiva.
+	if is_pro:
+		return
+	entitlement_status = EntitlementStatus.PENDING if pending else EntitlementStatus.UNKNOWN
+	_billing_status = "PAGAMENTO EM ANÁLISE — sem anúncios enquanto estiver pendente." if pending else "Verificando compra na conta Google..."
+	_refresh_ads_allowed()
+	_update_pro_ui()
 
 
 func _apply_pro_entitlement(owned: bool, settle_between_matches: bool = false) -> void:
@@ -1024,6 +1116,7 @@ func _apply_pro_entitlement(owned: bool, settle_between_matches: bool = false) -
 		_pending_pro_revocation = true
 		_pending_pro_preferences = false
 		_billing_status = "Pro não confirmado; a partida atual será preservada."
+		_refresh_ads_allowed()
 		_update_pro_ui()
 		return
 	if is_pro != owned:
@@ -1051,6 +1144,7 @@ func _apply_pro_entitlement(owned: bool, settle_between_matches: bool = false) -
 			if state in [GameState.SETTINGS, GameState.STATS]:
 				state = GameState.MENU
 	_billing_status = "PRO ATIVO — SEM ANÚNCIOS" if is_pro else "Pro disponível como compra única na Play Store."
+	_refresh_ads_allowed()
 	_update_pro_ui()
 	_show_interface()
 	queue_redraw()
@@ -1096,7 +1190,8 @@ func _on_pro_price_changed(formatted_price: String) -> void:
 
 
 func _buy_pro() -> void:
-	if not is_pro and _billing_purchase_available and is_instance_valid(_billing_adapter):
+	if entitlement_status == EntitlementStatus.FREE_CONFIRMED and not is_pro \
+			and _billing_purchase_available and is_instance_valid(_billing_adapter):
 		_billing_adapter.purchase()
 
 
@@ -1114,10 +1209,17 @@ func _update_pro_ui() -> void:
 	_pro_row.visible = is_pro
 	_pro_button.visible = not is_pro
 	_pro_button.text = "★  PRO  •  %s  ★" % _pro_price if not _pro_price.is_empty() else "★  DESBLOQUEAR PRO  ★"
-	_pro_button.disabled = not _billing_purchase_available
-	_restore_purchase_button.visible = not is_pro
+	_pro_button.disabled = not _billing_purchase_available or entitlement_status != EntitlementStatus.FREE_CONFIRMED
+	_restore_purchase_button.visible = not is_pro or _negative_count > 0
 	_restore_purchase_button.disabled = not is_instance_valid(_billing_adapter)
-	_pro_status_label.text = "Verificação Pro pendente; partida atual preservada." if _pending_pro_revocation else "PRO ATIVO — SEM ANÚNCIOS" if is_pro else _billing_status
+	# Durante a carência de revogação o botão Restaurar volta ao menu Pro;
+	# reduzir o espaçamento evita cortar ações em telas baixas.
+	_menu_content.add_theme_constant_override("separation", 3 if is_pro and _negative_count > 0 else 5)
+	_pro_status_label.text = "Verificação Pro pendente; partida atual preservada." if _pending_pro_revocation \
+			else "PRO MANTIDO — confira conta Google e toque RESTAURAR." if is_pro and _negative_count > 0 \
+			else "PRO ATIVO — SEM ANÚNCIOS" if is_pro \
+			else "PAGAMENTO EM ANÁLISE — sem anúncios." if entitlement_status == EntitlementStatus.PENDING \
+			else _billing_status
 	_privacy_edition_label.text = "Pro funciona sem anúncios; a compra é verificada na Play Store." if is_pro else "O jogo funciona offline; anúncios ainda não estão ativos."
 	_privacy_storage_label.text = "Preferências e estatísticas ficam no aparelho." if is_pro else "O direito Pro é restaurado pela conta da Play Store."
 
@@ -1379,6 +1481,7 @@ func _restore_pro_defaults() -> void:
 func _build_interface() -> void:
 	_menu = _new_overlay()
 	var menu_content := _overlay_content(_menu)
+	_menu_content = menu_content
 	menu_content.add_theme_constant_override("separation", 5)
 	_edition_title = _add_label(menu_content, "PONG", 60, WHITE)
 	_edition_subtitle = _add_label(menu_content, "GRÁTIS  /  MOBILE", 15, CYAN)
