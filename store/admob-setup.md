@@ -6,7 +6,7 @@
 - `scripts/pong.gd` oferece intersticial apenas **depois que a partida terminou e a tela final apareceu**, uma tentativa por partida. Não dispara anúncios durante a partida, pausa, primeira partida ou menu. Enquanto a apresentação aceita estiver pendente, os botões de próxima partida/menu ficam indisponíveis até confirmação de fechamento, falha, cancelamento ou recuperação nativa segura. Depois de uma espera excessiva, o jogador pode **fechar o app**, mas não iniciar gameplay atrás de um anúncio desconhecido.
 - O contador e os horários das impressões usam **milissegundos Unix** e persistem localmente em `user://pong_free_ad_policy.cfg`, inclusive entre reinicializações. O modo gratuito guarda a contagem de partidas enquanto o SDK não estiver instalado.
 - **Ainda não existe integração do SDK nativo AdMob**. A modalidade gratuita não exibe anúncios nem utiliza identificador de publicidade nesta versão. O app pode continuar funcionando offline.
-- **Não há segundo pacote Pro.** A compra interna `remove_ads` é consultada no mesmo aplicativo por Google Play Billing. Quando o direito Pro está ativo, não solicitar nem exibir publicidade.
+- **Não há segundo pacote Pro.** A compra interna `pro_unlock` é consultada no mesmo aplicativo por Google Play Billing. Quando o direito Pro está ativo, não solicitar nem exibir publicidade.
 
 ## Para habilitar anúncios antes do lançamento monetizado
 

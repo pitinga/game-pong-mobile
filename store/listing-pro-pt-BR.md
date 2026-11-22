@@ -1,6 +1,6 @@
 # ARQUIVO HISTÓRICO — NÃO PUBLICAR COMO APLICATIVO SEPARADO
 
-Desde a versão 0.4.0, o Pong tem uma única ficha na Play Store. O Pro é desbloqueado por compra interna não consumível `remove_ads` no pacote `com.pitinga.pongmobile`. As informações abaixo são apenas material de referência da proposta antiga.
+Desde a versão 0.4.0, o Pong tem uma única ficha na Play Store. O Pro é desbloqueado por compra interna não consumível `pro_unlock` no pacote `com.pitinga.pongmobile`. As informações abaixo são apenas material de referência da proposta antiga.
 
 # Pong Mobile Pro — ficha de publicação (pt-BR)
 

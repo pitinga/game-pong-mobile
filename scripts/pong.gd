@@ -78,7 +78,9 @@ var _interstitial_adapter: Node
 var _billing_adapter: Node
 var _billing_purchase_available := false
 var _billing_status := "Compras disponíveis quando o Google Play estiver configurado."
+var _pro_price := ""
 var _pending_pro_preferences := false
+var _pending_pro_revocation := false
 var _interstitial_attempted_this_match := false
 var _interstitial_state: InterstitialState = InterstitialState.IDLE
 var _ad_request_sequence := 0
@@ -554,6 +556,10 @@ func _start_match() -> void:
 	if _active_ad_request_id != -1:
 		return
 	_break_streak_on_abandon()
+	# Uma revogação recebida durante a partida anterior só entra na
+	# próxima partida; não mudar regras/raquetes em pleno rally.
+	state = GameState.MENU
+	_settle_pro_transition()
 	_match_id += 1
 	_clear_touch_captures()
 	_interstitial_attempted_this_match = false
@@ -831,7 +837,7 @@ func _on_interstitial_opened(request_id: int) -> void:
 func _on_interstitial_impression(request_id: int) -> void:
 	# Aceita impressão de uma solicitação real mesmo após close/navegação;
 	# ID impede que callback antigo seja atribuído a outra tentativa.
-	if is_pro or not _ad_requests.has(request_id):
+	if not _ad_requests.has(request_id):
 		return
 	var record: Dictionary = _ad_requests[request_id]
 	if record["impressed"] or record["canceled"] or record["failed"]:
@@ -876,6 +882,11 @@ func _finish_ad_request(request_id: int) -> void:
 	_ad_recovery_needed = false
 	_ad_next_recovery_attempt_ticks = 0
 	_set_ad_buttons_busy(false)
+	if is_pro:
+		# Não interromper o anúncio já iniciado, mas não aceitar novos.
+		call_deferred("set_interstitial_adapter", null)
+	if _pending_pro_revocation and state not in [GameState.PLAYING, GameState.PAUSED]:
+		_settle_pro_transition()
 
 
 func _set_ad_buttons_busy(busy: bool) -> void:
@@ -921,12 +932,8 @@ func _return_to_menu() -> void:
 		return
 	_break_streak_on_abandon()
 	_clear_touch_captures()
-	if _pending_pro_preferences and is_pro:
-		_load_pro_settings()
-		_load_pro_stats()
-		_sync_pro_controls()
-	_pending_pro_preferences = false
 	state = GameState.MENU
+	_settle_pro_transition()
 	player_score = 0
 	cpu_score = 0
 	_reset_positions()
@@ -966,13 +973,15 @@ func set_billing_adapter(adapter: Node) -> void:
 			["entitlement_checked", Callable(self, "_on_entitlement_checked")],
 			["availability_changed", Callable(self, "_on_billing_availability")],
 			["purchase_message", Callable(self, "_on_billing_message")],
+			["price_changed", Callable(self, "_on_pro_price_changed")],
 		]:
-			if _billing_adapter.is_connected(connection[0], connection[1]):
+			if _billing_adapter.has_signal(connection[0]) and _billing_adapter.is_connected(connection[0], connection[1]):
 				_billing_adapter.disconnect(connection[0], connection[1])
 		if _billing_adapter.get_parent() == self:
 			_billing_adapter.queue_free()
 	_billing_adapter = null
 	_billing_purchase_available = false
+	_pro_price = ""
 	if adapter == null:
 		_update_pro_ui()
 		return
@@ -987,6 +996,8 @@ func set_billing_adapter(adapter: Node) -> void:
 	adapter.entitlement_checked.connect(_on_entitlement_checked)
 	adapter.availability_changed.connect(_on_billing_availability)
 	adapter.purchase_message.connect(_on_billing_message)
+	if adapter.has_signal("price_changed"):
+		adapter.price_changed.connect(_on_pro_price_changed)
 	_update_pro_ui()
 	adapter.start()
 
@@ -1010,6 +1021,16 @@ func _load_cached_pro_entitlement() -> void:
 
 
 func _apply_pro_entitlement(owned: bool) -> void:
+	if owned:
+		_pending_pro_revocation = false
+	elif is_pro and (state in [GameState.PLAYING, GameState.PAUSED] or _active_ad_request_id != -1):
+		# A titularidade já foi persistida como revogada. A experiência
+		# iniciada permanece íntegra até o menu/fechamento do anúncio.
+		_pending_pro_revocation = true
+		_pending_pro_preferences = false
+		_billing_status = "Pro não confirmado; a partida atual será preservada."
+		_update_pro_ui()
+		return
 	if is_pro != owned:
 		is_pro = owned
 		if owned:
@@ -1024,6 +1045,7 @@ func _apply_pro_entitlement(owned: bool) -> void:
 			if _active_ad_request_id == -1:
 				set_interstitial_adapter(null)
 		else:
+			_pending_pro_revocation = false
 			_pending_pro_preferences = false
 			match_mode = MatchMode.CLASSIC
 			point_limit = WIN_SCORE
@@ -1037,6 +1059,19 @@ func _apply_pro_entitlement(owned: bool) -> void:
 	_update_pro_ui()
 	_show_interface()
 	queue_redraw()
+
+
+func _settle_pro_transition() -> void:
+	if _active_ad_request_id != -1:
+		return
+	if _pending_pro_revocation:
+		_pending_pro_revocation = false
+		_apply_pro_entitlement(false)
+	elif _pending_pro_preferences and is_pro:
+		_load_pro_settings()
+		_load_pro_stats()
+		_sync_pro_controls()
+	_pending_pro_preferences = false
 
 
 func _sync_pro_controls() -> void:
@@ -1060,6 +1095,11 @@ func _on_billing_message(message: String) -> void:
 	_update_pro_ui()
 
 
+func _on_pro_price_changed(formatted_price: String) -> void:
+	_pro_price = formatted_price
+	_update_pro_ui()
+
+
 func _buy_pro() -> void:
 	if not is_pro and _billing_purchase_available and is_instance_valid(_billing_adapter):
 		_billing_adapter.purchase()
@@ -1078,10 +1118,11 @@ func _update_pro_ui() -> void:
 	_features_label.text = "MODOS EXTRAS E AJUSTES PERSONALIZADOS" if is_pro else "1 JOGADOR  •  PRIMEIRO A 7 PONTOS"
 	_pro_row.visible = is_pro
 	_pro_button.visible = not is_pro
+	_pro_button.text = "★  PRO  •  %s  ★" % _pro_price if not _pro_price.is_empty() else "★  DESBLOQUEAR PRO  ★"
 	_pro_button.disabled = not _billing_purchase_available
 	_restore_purchase_button.visible = not is_pro
 	_restore_purchase_button.disabled = not is_instance_valid(_billing_adapter)
-	_pro_status_label.text = "PRO ATIVO — SEM ANÚNCIOS" if is_pro else _billing_status
+	_pro_status_label.text = "Verificação Pro pendente; partida atual preservada." if _pending_pro_revocation else "PRO ATIVO — SEM ANÚNCIOS" if is_pro else _billing_status
 	_privacy_edition_label.text = "Pro funciona sem anúncios; a compra é verificada na Play Store." if is_pro else "O jogo funciona offline; anúncios ainda não estão ativos."
 	_privacy_storage_label.text = "Preferências e estatísticas ficam no aparelho." if is_pro else "O direito Pro é restaurado pela conta da Play Store."
 

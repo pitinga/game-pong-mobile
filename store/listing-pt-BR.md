@@ -12,7 +12,7 @@ Preparação da publicação Android. Conferir os itens antes de enviar pelo Pla
 - Android alvo: **16 / API 36**
 - Arquitetura: **ARM64**
 - Idioma inicial: **Português (Brasil)**
-- Preço sugerido: **Gratuito**, com compra interna única **Pro (remove_ads)**; publicidade AdMob prevista após integração
+- Preço sugerido: **Gratuito**, com compra interna única **Pro (pro_unlock)**; publicidade AdMob prevista após integração
 
 ## Descrição curta (até 80 caracteres)
 
@@ -60,7 +60,7 @@ Uma única versão Android: gratuito + desbloqueio Pro por compra no aplicativo.
 ## Pendências antes de enviar
 
 - Confirmar o identificador definitivo `com.pitinga.pongmobile` e que o app será gratuito.
-- Criar produto interno **não consumível** `remove_ads` no mesmo aplicativo, ativar e testar compra, pendência, restauração, atualização e reembolso. Usar somente licenças de teste na validação inicial.
+- Criar produto interno **não consumível** `pro_unlock` no mesmo aplicativo, ativar e testar compra, pendência, restauração, atualização e reembolso. Usar somente licenças de teste na validação inicial.
 - Validar o plugin **GodotGooglePlayBilling 3.3.0** em um Android com Google Play e configurar o produto para habilitar a compra.
 - Integrar o SDK AdMob ao aplicativo único, respeitando o direito Pro para não solicitar anúncios; configurar consentimento, testar IDs de teste e ativar IDs reais somente na publicação monetizada.
 - Ativar links "Conheça nossos jogos" apenas para aplicativos já publicados na Play Store.

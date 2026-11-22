@@ -46,6 +46,9 @@ jobs:
       - name: Importar projeto
         run: godot --headless --path . --editor --import --quit
 
+      - name: Verificar integridade do plugin oficial de cobrança
+        run: (cd addons/GodotGooglePlayBilling && sha256sum -c SHA256SUMS)
+
       - name: Rodar testes
         run: |
           godot --headless --path . --script res://tests/test_pong.gd
@@ -82,6 +85,10 @@ jobs:
           aapt="$ANDROID_SDK_ROOT/build-tools/36.1.0/aapt"
           "$aapt" dump badging build/pong-mobile-debug.apk | grep -q "^package: name='com.pitinga.pongmobile' "
           "$aapt" dump badging build/pong-mobile-debug.apk | grep -Fq "native-code: 'arm64-v8a'"
+          # A compilação bem-sucedida, sozinha, não prova inclusão do Billing.
+          "$aapt" dump permissions build/pong-mobile-debug.apk | grep -F 'com.android.vending.BILLING'
+          "$aapt" dump xmltree build/pong-mobile-debug.apk AndroidManifest.xml | grep -F 'org.godotengine.plugin.googleplaybilling.GodotGooglePlayBilling'
+          unzip -p build/pong-mobile-debug.apk 'classes*.dex' | strings | grep -F 'org/godotengine/plugin/googleplaybilling/GodotGooglePlayBilling'
 
       # Repo público: os APKs só existem no runner efêmero.
       # Nunca publicar APKs em artifacts, releases ou caches públicos.
