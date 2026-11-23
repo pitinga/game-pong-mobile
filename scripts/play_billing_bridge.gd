@@ -23,6 +23,7 @@ const CONNECT_RETRY_LIMIT := 5
 const ACK_RETRY_LIMIT := 5
 const PURCHASE_SETTLE_MSEC := 300_000
 const CHECKOUT_WATCHDOG_SEC := 20.0
+const PURCHASE_QUERY_WATCHDOG_SEC := 15.0
 
 var _native: Object
 var _product_available := false
@@ -40,6 +41,10 @@ var _query_active := false
 var _query_sequence := 0
 var _query_context: Dictionary = {}
 var _query_queue: Array[Dictionary] = []
+# O SDK não devolve o ID local da consulta. Depois de um timeout, qualquer
+# callback tardio pode pertencer à operação anterior: falhar fechado até a
+# próxima inicialização do app, sem reutilizar resposta para outro request.
+var _query_untrusted_after_timeout := false
 var _acknowledging: Dictionary = {}
 var _ack_retry_attempts: Dictionary = {}
 var _reconnect_timer := Timer.new()
@@ -48,10 +53,11 @@ var _details_watchdog_timer := Timer.new()
 var _purchase_recheck_timer := Timer.new()
 var _ack_retry_timer := Timer.new()
 var _checkout_watchdog := Timer.new()
+var _purchase_query_watchdog := Timer.new()
 
 
 func _init() -> void:
-	for timer in [_reconnect_timer, _connect_timeout_timer, _details_watchdog_timer, _purchase_recheck_timer, _ack_retry_timer, _checkout_watchdog]:
+	for timer in [_reconnect_timer, _connect_timeout_timer, _details_watchdog_timer, _purchase_recheck_timer, _ack_retry_timer, _checkout_watchdog, _purchase_query_watchdog]:
 		timer.one_shot = true
 		add_child(timer)
 	_reconnect_timer.timeout.connect(_retry_connection)
@@ -60,6 +66,7 @@ func _init() -> void:
 	_purchase_recheck_timer.timeout.connect(refresh)
 	_ack_retry_timer.timeout.connect(_retry_acknowledgements)
 	_checkout_watchdog.timeout.connect(_on_checkout_timeout)
+	_purchase_query_watchdog.timeout.connect(_on_purchase_query_timeout)
 
 
 func start() -> void:
@@ -99,6 +106,9 @@ func _on_connect_timeout() -> void:
 
 
 func refresh() -> void:
+	if _query_untrusted_after_timeout:
+		purchase_message.emit("A consulta à Play Store expirou. Feche e reabra o jogo para verificar compras com segurança.")
+		return
 	if _native != null and _connected:
 		_queue_purchase_query(-1, false)
 	elif _native != null:
@@ -117,6 +127,9 @@ func restore() -> void:
 	if _native == null:
 		refresh()
 		return
+	if _query_untrusted_after_timeout:
+		refresh()
+		return
 	_query_queue.append({"ad_id": -1, "manual_restore": true})
 	if _connected:
 		_dispatch_purchase_query()
@@ -127,7 +140,7 @@ func restore() -> void:
 func verify_free_before_ad(request_id: int) -> void:
 	# A resposta deve pertencer a ESTA consulta, e não a um refresh antigo.
 	# Fila única impede que callbacks sem request_id do SDK se misturem.
-	if _native == null or not _connected or _checkout_in_progress or _pending_purchase:
+	if _query_untrusted_after_timeout or _native == null or not _connected or _checkout_in_progress or _pending_purchase:
 		ad_verification_result.emit(request_id, false)
 		return
 	_queue_purchase_query(request_id, false)
@@ -158,16 +171,32 @@ func _queue_purchase_query(ad_id: int, manual_restore: bool) -> void:
 
 
 func _dispatch_purchase_query() -> void:
-	if _query_active or _query_queue.is_empty() or _native == null or not _connected:
+	if _query_untrusted_after_timeout or _query_active or _query_queue.is_empty() or _native == null or not _connected:
 		return
 	_query_context = _query_queue.pop_front()
 	_query_sequence += 1
 	_query_context["query_id"] = _query_sequence
 	_query_active = true
 	_native.call("queryPurchases", PRODUCT_INAPP, false)
+	if is_inside_tree() and _query_active:
+		_purchase_query_watchdog.start(PURCHASE_QUERY_WATCHDOG_SEC)
+
+
+func _on_purchase_query_timeout() -> void:
+	if not _query_active:
+		return
+	# Sem request_id na resposta nativa, reconectar por si só NÃO torna
+	# seguro atribuir um callback antigo à consulta seguinte nesta sessão.
+	_query_untrusted_after_timeout = true
+	entitlement_verification_failed.emit()
+	if _native != null and _native.has_method("endConnection"):
+		_native.call("endConnection")
+	_on_disconnected()
+	purchase_message.emit("A Play Store não respondeu. Reinicie o jogo para restaurar compras; anúncios permanecem bloqueados.")
 
 
 func _finish_purchase_query(verified_free: bool = false) -> void:
+	_purchase_query_watchdog.stop()
 	var ad_id := int(_query_context.get("ad_id", -1)) if _query_active else -1
 	_query_context.clear()
 	_query_active = false
@@ -230,6 +259,7 @@ func _on_connected() -> void:
 
 
 func _on_disconnected() -> void:
+	_purchase_query_watchdog.stop()
 	# O callback de acknowledge em voo pode nunca chegar após desconexão.
 	# Destravar os tokens e mantê-los na fila para nova tentativa.
 	for token in _acknowledging.keys():
@@ -318,6 +348,10 @@ func _on_product_details(response: Dictionary) -> void:
 
 
 func _on_purchases(response: Dictionary) -> void:
+	# Ignorar respostas sem consulta ativa e todas as respostas da sessão
+	# contaminada por timeout: o SDK não traz um ID para desambiguá-las.
+	if not _query_active or _query_untrusted_after_timeout:
+		return
 	if int(response.get("response_code", -1)) != RESPONSE_OK:
 		entitlement_verification_failed.emit()
 		purchase_message.emit("Não foi possível restaurar compras agora. Tente novamente.")

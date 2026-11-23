@@ -263,11 +263,13 @@ func _run() -> void:
 	var entitlements: Array[bool] = []
 	bridge.purchase_message.connect(func(message: String): messages.append(message))
 	bridge.entitlement_checked.connect(func(owned: bool): entitlements.append(owned))
+	bridge.refresh()
 	bridge._on_purchases({"response_code": 0, "purchases": [{
 		"product_ids": PackedStringArray(["pro_unlock"]), "purchase_state": 2,
 	}]})
 	_check(bridge._pending_purchase and entitlements.is_empty(), "Compra nativa pendente não emite revogação")
 	var message_count_before := messages.size()
+	bridge.refresh()
 	bridge._on_purchases({"response_code": 0, "purchases": []})
 	_check(not bridge._pending_purchase and entitlements == [false] and messages.size() == message_count_before, "Consulta automática Free não sugere erro de compra inexistente")
 	bridge.restore()
