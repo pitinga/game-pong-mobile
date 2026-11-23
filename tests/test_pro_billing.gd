@@ -32,6 +32,7 @@ class FakeNative:
 	var launches := 0
 	var queries := 0
 	var connections := 0
+	var ends := 0
 	var last_option_id := ""
 
 	func startConnection() -> void:
@@ -41,7 +42,7 @@ class FakeNative:
 		pass
 
 	func endConnection() -> void:
-		pass
+		ends += 1
 
 	func acknowledgePurchase(token: String) -> void:
 		acknowledges.append(token)
@@ -287,9 +288,12 @@ func _run() -> void:
 	bridge._on_purchases({"response_code": 0, "purchases": []})
 	_check(delivered.size() == 2, "Segunda resposta vazia dentro do prazo não revoga Pro recém-pago")
 	bridge._recent_purchase_deadline_msec = Time.get_ticks_msec() - 1
+	bridge.refresh()
 	bridge._on_purchases({"response_code": 0, "purchases": []})
 	_check(delivered.size() == 3 and not delivered.back(), "Após prazo de sincronização, consulta válida sem produto permite revogação")
+	bridge.refresh()
 	bridge._on_purchases({"response_code": 0, "purchases": [bought]})
+	bridge.refresh()
 	bridge._on_purchases({"response_code": 0, "purchases": []})
 	_check(delivered.size() == 5 and not delivered.back(), "Após compra confirmada por consulta, reembolso posterior revoga sem carência")
 	# Desconexão no meio do acknowledge não pode prender o token para sempre.
@@ -339,6 +343,41 @@ func _run() -> void:
 	var reconnects_before: int = native.connections
 	bridge._on_connect_timeout()
 	_check(native.connections == reconnects_before and not bridge._connecting and bridge._connection_retry_attempts == 2, "Conexão sem callback libera estado e programa retry limitado")
+	# O SDK não tem request_id no callback. Após um timeout nunca aplicar
+	# resposta órfã a uma nova restauração ou autorizar anúncio nesta sessão.
+	bridge._connected = true
+	bridge._connecting = false
+	bridge._connection_retry_attempts = 0
+	var query_results: Array[bool] = []
+	var timed_out_ads: Array[int] = []
+	bridge.ad_verification_result.connect(func(id: int, free: bool) -> void:
+		timed_out_ads.append(id)
+		query_results.append(free))
+	queries_before = native.queries
+	bridge.verify_free_before_ad(991)
+	bridge.restore()
+	bridge.refresh()
+	_check(bridge._query_active and bridge._query_queue.size() == 2 and native.queries == queries_before + 1, "Consulta sem callback ocupa slot e enfileira restauração/refresh")
+	bridge._on_purchase_query_timeout()
+	_check(not bridge._query_active and bridge._query_queue.is_empty() and bridge._query_context.is_empty() and native.ends == 1, "Watchdog limpa fila e força encerramento da conexão nativa")
+	_check(bridge._query_untrusted_after_timeout and timed_out_ads == [991] and query_results == [false], "Timeout falha fechado para anúncio em vez de autorizar Free")
+	bridge._on_purchases({"response_code": 0, "purchases": []})
+	bridge._on_connected()
+	bridge._on_product_details({"response_code": 0, "product_details": []})
+	bridge.verify_free_before_ad(992)
+	bridge.restore()
+	bridge._on_purchases({"response_code": 0, "purchases": []})
+	_check(timed_out_ads == [991, 992] and query_results == [false, false] and native.queries == queries_before + 1, "Callback antigo e reconexão não reutilizam contexto nem liberam anúncios")
+	var fresh_bridge := BillingBridge.new()
+	fresh_bridge._native = native
+	fresh_bridge._connected = true
+	var fresh_results: Array[bool] = []
+	fresh_bridge.ad_verification_result.connect(func(_id: int, free: bool): fresh_results.append(free))
+	fresh_bridge.verify_free_before_ad(993)
+	fresh_bridge._on_purchases({"response_code": 0, "purchases": []})
+	_check(fresh_results == [true] and native.queries == queries_before + 2, "Nova sessão permite nova consulta independente após reiniciar o app")
+	fresh_bridge._native = null
+	fresh_bridge.free()
 	bridge._native = null
 	bridge.free()
 	native.free()

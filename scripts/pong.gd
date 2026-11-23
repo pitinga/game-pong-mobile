@@ -415,6 +415,13 @@ func _input(event: InputEvent) -> void:
 		_release_touch(event.index)
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_BACK:
+			# No Android o SO já entrega WM_GO_BACK_REQUEST; evitar
+			# processar duas vezes o mesmo pressionamento (pausa + menu).
+			if OS.get_name() != "Android":
+				_handle_back_request()
+				get_viewport().set_input_as_handled()
+			return
 		if event.keycode == KEY_ESCAPE or event.keycode == KEY_P:
 			if state == GameState.PLAYING or state == GameState.PAUSED:
 				_toggle_pause()
@@ -490,6 +497,9 @@ func _clear_touch_captures() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		_handle_back_request()
+		return
 	if what == NOTIFICATION_APPLICATION_RESUMED and _active_ad_request_id != -1:
 		_ad_next_recovery_attempt_ticks = 0
 		_process(0.0)
@@ -500,6 +510,16 @@ func _notification(what: int) -> void:
 		_clear_touch_captures()
 		_show_interface()
 		queue_redraw()
+
+
+func _handle_back_request() -> void:
+	match state:
+		GameState.PLAYING:
+			_toggle_pause()
+		GameState.MENU:
+			get_tree().quit()
+		_:
+			_return_to_menu()
 
 
 func _on_resized() -> void:
